@@ -3,8 +3,9 @@
 //! The player's missile system lives here: master arm, the seeker and its
 //! lock, the two wingtip Sidewinders, and the missiles themselves once they
 //! have left the rails. The flight model and the rest of the aircraft know
-//! nothing about them; `main.rs` feeds in the target list each frame and turns
-//! the events into sound, particles and damage.
+//! nothing about them; `main.rs` feeds in the target list each fixed step and
+//! turns the events into sound, particles and damage. Targets are live ADS-B
+//! aircraft, airport traffic, or the AI bandits (`TargetKey::Bandit`).
 //!
 //! A missile is a simple boost-and-coast body: it leaves the wingtip with the
 //! aircraft's velocity, burns for a couple of seconds, then drags down while
@@ -53,6 +54,8 @@ pub enum TargetKey {
     Live(String),
     /// A moving aircraft at an airport: which airfield, and the mover's id.
     Airport { apt: u32, mover: u32 },
+    /// An AI aircraft, by its stable slot in `bandits::Bandits` (never reused).
+    Bandit(u32),
 }
 
 /// One target a seeker may lock onto.
@@ -752,5 +755,35 @@ mod tests {
         w.armed = false;
         w.reset(&crate::aircraft::fa18::SPEC, &pieces);
         assert!(w.armed && w.stations.iter().all(|s| s.loaded));
+    }
+
+    #[test]
+    fn a_bandit_can_be_locked_without_disturbing_the_other_targets() {
+        let (plane, pieces) = hornet_with_missiles();
+        let mut w = Weapons::new(&crate::aircraft::fa18::SPEC, &pieces);
+        let targets = [
+            Target {
+                key: TargetKey::Live("LIVE01".into()),
+                pos: plane.pos + plane.forward() * 6_000.0 + plane.right() * 3_000.0,
+                vel: plane.vel,
+                size: 1,
+                label: "LIVE01".into(),
+            },
+            Target {
+                key: TargetKey::Bandit(4),
+                pos: plane.pos + plane.forward() * 4_000.0,
+                vel: plane.vel,
+                size: 1,
+                label: "BANDIT 1".into(),
+            },
+        ];
+        // The bandit is nearer the nose, so the first cycle picks it.
+        assert!(w.cycle_target(&plane, &targets));
+        assert_eq!(w.target, Some(TargetKey::Bandit(4)));
+        w.lock = 1.0;
+        assert!(matches!(w.try_fire(&plane, true).as_slice(), [Event::Fired { station: 0 }]));
+        // The live target is still there and lockable.
+        assert!(w.cycle_target(&plane, &targets));
+        assert_eq!(w.target, Some(TargetKey::Live("LIVE01".into())));
     }
 }

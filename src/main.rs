@@ -2,8 +2,10 @@ mod airframe;
 mod airfield;
 mod airmodels;
 mod airports;
+mod ai;
 mod approach;
 mod audio;
+mod bandits;
 mod buildings;
 mod aircraft;
 mod cockpit;
@@ -766,6 +768,8 @@ struct Game {
     plane: Plane,
     /// the F/A-18's missiles: master arm, seeker and the two wingtip shots
     weapons: weapons::Weapons,
+    /// the AI aircraft in the fight
+    bandits: bandits::Bandits,
     crashed: bool,
     crash: Option<Crash>,
     crash_real: f64,
@@ -1133,7 +1137,7 @@ impl Game {
             g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), weapon_flash: None, damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
-            start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, city_glow: 0.0, skyglow: Default::default(), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, storm_adapt: 0.0, plane, weapons,
+            start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, city_glow: 0.0, skyglow: Default::default(), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, storm_adapt: 0.0, plane, weapons, bandits: bandits::Bandits::new(),
             airport_rx: None, hold_spot: None,
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
@@ -1175,6 +1179,11 @@ impl Game {
                 g.menu.runway = rw;
                 g.menu.start = if appr { menu::Start::Approach } else { menu::Start::Runway };
             }
+        }
+        // A direct flight (no menu) starts with a bandit ahead; a menu start
+        // gets one when its flight begins, in `respawn_at`.
+        if g.mode == Mode::Fly {
+            g.spawn_bandit();
         }
         Ok(g)
     }
@@ -1229,6 +1238,8 @@ impl Game {
         self.weapons.reset(spec, &self.model.pieces);
         self.cam_dist = spec.cam_dist;
         self.menu.aircraft = aircraft::index_of(spec);
+        self.bandits.reset();
+        self.spawn_bandit();
     }
 
     /// Menu selection: swap to `spec` without stalling the frame. A model not
@@ -1438,6 +1449,34 @@ impl Game {
         self.gauges = gauges::Gauges::new(&self.plane, self.frame ^ 0x9e37);
         self.weapons.reset(self.spec, &self.model.pieces);
         self.weapon_flash = None;
+        self.bandits.reset();
+        self.spawn_bandit();
+    }
+
+    /// Is a type's model on the GPU (or the one being flown, which always is)?
+    /// A bandit type whose model is still being built is deferred, never built
+    /// once per bandit.
+    fn model_ready(&self, spec: &'static aircraft::Spec) -> bool {
+        std::ptr::eq(spec, self.spec) || self.hangar.iter().any(|l| std::ptr::eq(l.spec, spec))
+    }
+
+    /// One AI aircraft a few miles ahead of the player. It flies the player's
+    /// type, so it shares the model already on the GPU; the hangar holds one
+    /// per type, never one per bandit.
+    fn spawn_bandit(&mut self) {
+        if self.bandits.alive_count() > 0 || !self.model_ready(self.spec) {
+            return;
+        }
+        let up = self.plane.pos.normalize();
+        let fwd = self.plane.forward();
+        let fwd = (fwd - up * fwd.dot(up)).normalize_or_zero();
+        if fwd.length_squared() < 0.5 {
+            return;
+        }
+        let at = self.plane.pos + fwd * 5_000.0 + up * 300.0;
+        // Head-on, so it sees the player and the fight starts.
+        self.bandits.spawn(self.spec, at, -fwd, self.spec.cruise);
+        self.flash.push((t!("BANDIT INBOUND", "BANDIT EN APPROCHE").into(), self.real));
     }
 
     /// On the ground, at rest, waiting for the terrain under it to load.
@@ -2795,6 +2834,34 @@ impl Game {
         }
     }
 
+    /// A mid-air collision: both aircraft are wrecked, and the bandit is
+    /// credited as a kill. The player's own wreck falls from here; its crash
+    /// on the ground goes through the ordinary crash path.
+    fn mid_air_collision(&mut self, i: usize, femit: &mut Vec<(DVec3, render::Particle)>) {
+        let Some(b) = self.bandits.get(i) else { return };
+        if !b.alive {
+            return;
+        }
+        let at = (self.plane.pos + b.plane.pos) * 0.5;
+        if !self.bandits.destroy(i, bandits::KillBy::Collision) {
+            return;
+        }
+        // The player's aircraft is wrecked too: the collision tears the
+        // airframe up and stops the engine.
+        self.plane.dmg.hull = 1.0;
+        self.plane.dmg.engine = 0.0;
+        self.plane.cause = "MID-AIR COLLISION";
+        self.plane.omega += DVec3::new(1.2, 0.6, -2.4);
+        self.plane.dmg.vibe = 2.0;
+        self.anchor_fx(at);
+        self.blast_fx(at, 1.4, 1.0, femit);
+        self.weapon_flash = Some((at, 1.4, self.real));
+        if let Some(a) = &self.audio {
+            a.boom(1.5);
+        }
+        self.flash.push((t!("MID-AIR COLLISION", "COLLISION EN VOL").into(), self.real));
+    }
+
     /// A weapon-system event: status messages, the launch sound, and a
     /// missile's detonation in the particle system.
     fn weapon_event(&mut self, ev: weapons::Event, femit: &mut Vec<(DVec3, render::Particle)>) {
@@ -2841,6 +2908,7 @@ impl Game {
                     let hit = match &key {
                         weapons::TargetKey::Live(hex) => self.live.down(hex),
                         weapons::TargetKey::Airport { .. } => self.world.down_air_target(&key),
+                        weapons::TargetKey::Bandit(i) => self.bandits.hit(*i, pos, power, bandits::KillBy::Missile),
                     };
                     if hit {
                         let msg = if label.is_empty() { t!("SPLASH", "ABATTU").to_string() } else { t!("SPLASH  {}", "ABATTU  {}", label) };
@@ -3351,18 +3419,57 @@ impl Game {
         let mut femit: Vec<(DVec3, render::Particle)> = Vec::new();
         let (mut scrape_n, mut steps) = (0usize, 0usize);
         if !self.crashed && !in_menu {
-            let weapon_targets = if !self.weapons.has_weapons() {
+            // The live and airport traffic is gathered once a frame; the
+            // bandits' positions are refreshed every fixed step below.
+            let mut weapon_targets = if !self.weapons.has_weapons() {
                 Vec::new()
             } else {
                 let mut t = self.live.targets();
                 t.extend(self.world.air_targets(self.plane.pos));
                 t
             };
+            let static_targets = weapon_targets.len();
+            let has_weapons = self.weapons.has_weapons();
             self.acc += dt;
             let h = 1.0 / 180.0;
             while self.acc >= h {
                 self.acc -= h;
+                let (sphere, sphere_r) = self.plane.hull_sphere();
+                let player_prev = self.plane.pos + self.plane.rot * sphere.as_dvec3();
                 let imp = self.plane.step(h, &c, &self.world);
+                let player_now = self.plane.model_pos() + self.plane.rot * sphere.as_dvec3();
+                if imp.is_none() {
+                    self.bandits.step(h, &self.world, &self.plane);
+                    // Both aircraft swept from where they were to where they
+                    // are: a point test misses a fast head-on pass.
+                    if let Some(i) = self.bandits.swept_collision(player_prev, player_now, sphere_r as f64) {
+                        self.mid_air_collision(i, &mut femit);
+                    }
+                    self.bandits.remove_gone();
+                }
+                // A bandit that flew into the ground burns where it hit; one
+                // shot down has already had its fireball drawn by the weapon.
+                if !self.bandits.deaths.is_empty() {
+                    let deaths: Vec<_> = self.bandits.deaths.drain(..).collect();
+                    for (at, power) in deaths {
+                        self.anchor_fx(at);
+                        self.blast_fx(at, power, 1.0, &mut femit);
+                    }
+                }
+                // Wrecked bandits are smoke and fire only (no second flight
+                // model and no fluid volume of their own).
+                for b in self.bandits.items.iter().flatten() {
+                    if b.alive || b.gone || self.rng.f() > 0.10 {
+                        continue;
+                    }
+                    let r = &mut self.rng;
+                    let back = b.plane.vel.normalize_or_zero() * 4.0;
+                    femit.push((b.plane.pos, render::Particle { vel: (back.as_vec3() + r.dir() * 2.0).into(), life: r.range(1.5, 3.5), size0: r.range(1.0, 2.5), size1: r.range(5.0, 10.0), kind: crash::GAS, drag: 1.2, buoy: 1.5, seed: r.f(), alpha: r.range(0.3, 0.6), ..Default::default() }));
+                }
+                weapon_targets.truncate(static_targets);
+                if has_weapons {
+                    self.bandits.append_targets(&mut weapon_targets);
+                }
                 let powered = self.plane.sys.powered();
                 for ev in self.weapons.step(h, &self.plane, &weapon_targets, &self.world, powered) {
                     self.weapon_event(ev, &mut femit);
@@ -4193,6 +4300,81 @@ impl Game {
                 let local = self.model.pieces[pi].pivot.as_dvec3();
                 let model = Mat4::from_rotation_translation(m.rot.as_quat(), (m.pos - cam).as_vec3()) * Mat4::from_translation((-local).as_vec3());
                 objs.push(DrawObj { mesh: self.piece_mesh[pi], model, tint: [0.0; 4], glow: [0.0, kind, 0.0, 0.0], params, cast: 0, ..DrawObj::DEFAULT });
+            }
+            // The bandits: the same model, posed by the same `Plane::pose`.
+            // One of the player's type borrows the player's GPU model; any
+            // other type comes from the hangar's one-model-per-type cache.
+            for b in self.bandits.items.iter().flatten() {
+                if !b.alive {
+                    continue;
+                }
+                let (model, meshes, cuts) = if std::ptr::eq(b.spec, self.spec) {
+                    (&self.model, &self.piece_mesh, &self.piece_cut)
+                } else if let Some(l) = self.hangar.iter().find(|l| std::ptr::eq(l.spec, b.spec)) {
+                    (&l.model, &l.piece_mesh, &l.piece_cut)
+                } else {
+                    continue;
+                };
+                let base = Mat4::from_rotation_translation(b.plane.rot.as_quat(), (b.plane.model_pos() - cam).as_vec3());
+                let pose = b.plane.pose(&model.pieces);
+                let blur = ((b.plane.prop_rate - 30.0) / 25.0).clamp(0.0, 1.0) as f32;
+                let dm = b.plane.dmg;
+                let kind = b.spec.id as f32;
+                let burner = b.plane.burner as f32;
+                for (i, p) in model.pieces.iter().enumerate() {
+                    let hide = match p.vis {
+                        airframe::Vis::Always => false,
+                        airframe::Vis::SlowProp => blur >= 1.0,
+                        airframe::Vis::FastProp => blur <= 0.0,
+                        airframe::Vis::Chute => b.plane.spoilers < 0.02,
+                    };
+                    if hide || dm.hidden(p) {
+                        continue;
+                    }
+                    let tears = dm.tears_for(p);
+                    let torn = tears[0].is_some() || tears[1].is_some();
+                    objs.push(DrawObj {
+                        mesh: meshes[i],
+                        model: base * pose[i],
+                        tint: [blur, burner, 0.0, 0.0],
+                        glow: [0.0, kind, 0.0, 0.0],
+                        params,
+                        cast: 1 << render::PLANE_LAYER,
+                        glass: p.glass,
+                        cut: cuts[i] || torn,
+                        tear: [tears[0].gpu(), tears[1].gpu()],
+                        dmg: [tears[0].mode, tears[1].mode, dm.scuff[p.group], dm.jag_for(p)],
+                        dmg2: [dm.oil, dm.crack[0], dm.crack[1], dm.crack[2]],
+                        ..DrawObj::DEFAULT
+                    });
+                }
+                // A bandit that has lost a wing: the hanging part, as the player's.
+                for (side, fold) in dm.fold.iter().enumerate() {
+                    if !fold.on {
+                        continue;
+                    }
+                    let grp = if side == 0 { airframe::G_LWING } else { airframe::G_RWING };
+                    let swing = base * fold.mat();
+                    for (i, p) in model.pieces.iter().enumerate() {
+                        let structure = matches!(p.role, airframe::Role::WingStructure(_) | airframe::Role::TailStructure);
+                        if p.group != grp || p.glass || (dm.hidden(p) && !structure) {
+                            continue;
+                        }
+                        let stick = if structure { 0.12 * b.spec.span / 5.5 } else { 0.0 };
+                        let tears = [fold.tear.flip().grow(stick), fold.outer.grow(stick)];
+                        objs.push(DrawObj {
+                            mesh: meshes[i],
+                            model: swing * pose[i],
+                            glow: [0.0, kind, 0.0, 0.0],
+                            params,
+                            cast: 1 << render::PLANE_LAYER,
+                            cut: true,
+                            tear: [tears[0].gpu(), tears[1].gpu()],
+                            dmg: [tears[0].mode, tears[1].mode, dm.scuff[p.group].max(0.5), fold.tear.jag.max(0.03)],
+                            ..DrawObj::DEFAULT
+                        });
+                    }
+                }
             }
             self.own_lights(&base, &pose, params[5], &mut g, &mut own_lights);
         }
