@@ -151,7 +151,7 @@ impl Weapons {
     pub fn new(spec: &'static Spec, pieces: &[Piece]) -> Self {
         let mut w = Self {
             stations: Vec::new(),
-            armed: false,
+            armed: true,
             lock: 0.0,
             target: None,
             target_view: None,
@@ -165,7 +165,7 @@ impl Weapons {
         w
     }
 
-    /// Back to a fresh aircraft: two missiles, master arm off, no lock.
+    /// Back to a fresh aircraft: missiles loaded, weapons live, no lock.
     pub fn reset(&mut self, spec: &'static Spec, pieces: &[Piece]) {
         self.stations.clear();
         for st in spec.missiles() {
@@ -180,7 +180,7 @@ impl Weapons {
                 loaded: true,
             });
         }
-        self.armed = false;
+        self.armed = true;
         self.lock = 0.0;
         self.target = None;
         self.target_view = None;
@@ -728,5 +728,29 @@ mod tests {
         assert_eq!(w.stations.len(), 2);
         assert!(w.has_weapons());
         assert!(w.stations.iter().all(|s| s.loaded));
+    }
+
+    #[test]
+    fn a_fresh_aircraft_needs_no_arming_step() {
+        let (plane, pieces) = hornet_with_missiles();
+        let mut w = Weapons::new(&crate::aircraft::fa18::SPEC, &pieces);
+        assert!(w.armed, "weapons should be live on construction");
+        let target = Target {
+            key: TargetKey::Live("TEST123".into()),
+            pos: plane.pos + plane.forward() * 5_000.0,
+            vel: plane.vel,
+            size: 2,
+            label: "TEST123".into(),
+        };
+        assert!(w.cycle_target(&plane, std::slice::from_ref(&target)));
+        w.lock = 1.0;
+        assert!(matches!(
+            w.try_fire(&plane, true).as_slice(),
+            [Event::Fired { station: 0 }]
+        ));
+        // A reset gives the next flight the same live weapons.
+        w.armed = false;
+        w.reset(&crate::aircraft::fa18::SPEC, &pieces);
+        assert!(w.armed && w.stations.iter().all(|s| s.loaded));
     }
 }
