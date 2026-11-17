@@ -141,6 +141,12 @@ const PIECES: &[(&str, usize, Role, Option<&str>)] = &[
     ("right aileron", G_RWING, Role::Aileron(1), None),
     ("left speedbrake", G_LWING, Role::Other, None),
     ("right speedbrake", G_RWING, Role::Other, None),
+    ("left forward sparrow", G_FUSE, Role::Other, None),
+    ("right forward sparrow", G_FUSE, Role::Other, None),
+    ("left aft sparrow", G_FUSE, Role::Other, None),
+    ("right aft sparrow", G_FUSE, Role::Other, None),
+    ("left sidewinder", G_LWING, Role::Other, None),
+    ("right sidewinder", G_RWING, Role::Other, None),
     ("left nav light", G_LWING, Role::Other, None),
     ("right nav light", G_RWING, Role::Other, None),
     ("left stabilator", G_TAIL, Role::Elevator, None),
@@ -266,6 +272,37 @@ const fn main_leg(x: f64, name: &'static str, kick: f64) -> Leg {
         name,
     }
 }
+
+/// The F-4E's six air-to-air missiles: four AIM-7E-2 Sparrows in the fuselage's
+/// semi-recessed forward and aft wells, and one AIM-9J on each inboard wing
+/// pylon. The 4 + 2 fit is one of the type's real loads (the jet can also
+/// carry four Sidewinders, two on each inboard pylon); the station order is
+/// the real Sparrow launch sequence, left forward, right forward, left aft,
+/// right aft, then the Sidewinders
+/// (<https://f4.manuals.heatblur.se/stores/overview.html>: stations 3/4 are
+/// the forward wells, 6/7 the aft wells, and 2/8 the inboard pylons whose
+/// LAU-7 rails carry the AIM-9).
+///
+/// The fore-and-aft positions are scaled from an underside photograph of an
+/// F-4E with four Sparrows and two Sidewinders
+/// (<https://commons.wikimedia.org/wiki/File:F-4E_Phantom_II_armed_with_missiles_in_1985.JPEG>),
+/// against the model's 19.2 m length: the forward wells' centres about 5.7 m
+/// behind the nose, the aft pair about 10.5 m, and the Sidewinders on the
+/// inboard pylons at 3.35 m from the centreline. Estimate: ±0.15 m, since the
+/// photograph is a perspective view rather than a drawing.
+///
+/// Store masses with a full motor: AIM-7E 197 kg (435 lb) and AIM-9J 76.9 kg
+/// (169.6 lb)
+/// (<https://en.wikipedia.org/wiki/AIM-7_Sparrow>,
+/// <https://en.wikipedia.org/wiki/AIM-9_Sidewinder>).
+pub static MISSILES: [MissileStation; 6] = [
+    MissileStation { piece: "left forward sparrow", side: 0, group: G_FUSE, mass: 197.0, name: "L FWD" },
+    MissileStation { piece: "right forward sparrow", side: 1, group: G_FUSE, mass: 197.0, name: "R FWD" },
+    MissileStation { piece: "left aft sparrow", side: 0, group: G_FUSE, mass: 197.0, name: "L AFT" },
+    MissileStation { piece: "right aft sparrow", side: 1, group: G_FUSE, mass: 197.0, name: "R AFT" },
+    MissileStation { piece: "left sidewinder", side: 0, group: G_LWING, mass: 76.9, name: "L WING" },
+    MissileStation { piece: "right sidewinder", side: 1, group: G_RWING, mass: 76.9, name: "R WING" },
+];
 
 /// The F-4E's M61A1 Vulcan: 640 rounds, mounted internally under the nose
 /// (Wikipedia's F-4E specifications, "the E-model has a 20 mm M61A1 Vulcan
@@ -484,6 +521,14 @@ mod tests {
         // The wing in the flight and damage models is the one drawn.
         let tip = wing_sect(W_X1);
         assert!((tip.le.y - -0.40).abs() < 0.03 && (tip.le.z - 2.87).abs() < 0.05, "{:?}", tip.le);
+    }
+
+    #[test]
+    fn missile_pieces_are_in_the_model() {
+        let m = build();
+        for st in &MISSILES {
+            assert!(m.pieces.iter().any(|p| p.name == st.piece), "missing {}", st.piece);
+        }
     }
 
     /// The stabilator is one slab on a level shaft: its halves pitch as one,

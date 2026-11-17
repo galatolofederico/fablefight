@@ -125,6 +125,18 @@ const PIECES: &[(&str, usize, Role, Option<&str>)] = &[
     ("right flap", G_RWING, Role::Flap(1), None),
     ("left aileron", G_LWING, Role::Aileron(0), None),
     ("right aileron", G_RWING, Role::Aileron(1), None),
+    // (the weapon-bay doors are modelled open, and the missiles ride their
+    // trapezes: see MISSILES and docs/fablefight-limitations.md)
+    ("left bay door", G_FUSE, Role::Other, None),
+    ("right bay door", G_FUSE, Role::Other, None),
+    ("left side bay door", G_FUSE, Role::Other, None),
+    ("right side bay door", G_FUSE, Role::Other, None),
+    ("main bay amraam 1", G_FUSE, Role::Other, None),
+    ("main bay amraam 2", G_FUSE, Role::Other, None),
+    ("main bay amraam 3", G_FUSE, Role::Other, None),
+    ("main bay amraam 4", G_FUSE, Role::Other, None),
+    ("left sidewinder", G_FUSE, Role::Other, None),
+    ("right sidewinder", G_FUSE, Role::Other, None),
     ("left nav light", G_LWING, Role::Other, None),
     ("right nav light", G_RWING, Role::Other, None),
     ("left stabilator", G_TAIL, Role::Elevator, None),
@@ -257,6 +269,36 @@ const fn main_leg(x: f64, name: &'static str, kick: f64) -> Leg {
         name,
     }
 }
+
+/// The F-22A's six internal air-to-air missiles: four AIM-120C-5 AMRAAMs in
+/// the main ventral bay and one AIM-9M in each side bay. That is the type's
+/// classic air-superiority fit (four AMRAAM and two Sidewinders); the later
+/// six-AMRAAM "Sidekick" main-bay load is not modelled
+/// (<https://www.globalsecurity.org/military/systems/aircraft/f-22-weapons.htm>:
+/// "six AIM-120C and two AIM-9", main bay under the inlets, one AIM-9 in each
+/// side bay outboard of them; <https://en.wikipedia.org/wiki/Lockheed_Martin_F-22_Raptor>
+/// for the same 4 + 2 fit).
+///
+/// The main bay is about 0.90 m wide and 3.9 m long
+/// (<https://www.f-16.net/forum/viewtopic.php?t=8164>, a measured bay), which
+/// sets the four missile centres 0.27 m apart across the centreline. The
+/// fore-and-aft and vertical positions are estimates from the bay's size and
+/// the model's own belly line: ±0.10 m. The side-bay missiles are modelled on
+/// their trapezes extended outboard (see `docs/fablefight-limitations.md`),
+/// because the real ones are hidden behind shut doors until launch.
+///
+/// Store masses with a full motor: AIM-120C-5 161.5 kg (356 lb) and AIM-9M
+/// 85.3 kg (188 lb)
+/// (<https://en.wikipedia.org/wiki/AIM-120_AMRAAM>,
+/// <https://en.wikipedia.org/wiki/AIM-9_Sidewinder>).
+pub static MISSILES: [MissileStation; 6] = [
+    MissileStation { piece: "main bay amraam 1", side: 0, group: G_FUSE, mass: 161.5, name: "BAY 1" },
+    MissileStation { piece: "main bay amraam 2", side: 0, group: G_FUSE, mass: 161.5, name: "BAY 2" },
+    MissileStation { piece: "main bay amraam 3", side: 1, group: G_FUSE, mass: 161.5, name: "BAY 3" },
+    MissileStation { piece: "main bay amraam 4", side: 1, group: G_FUSE, mass: 161.5, name: "BAY 4" },
+    MissileStation { piece: "left sidewinder", side: 0, group: G_FUSE, mass: 85.3, name: "L SIDE BAY" },
+    MissileStation { piece: "right sidewinder", side: 1, group: G_FUSE, mass: 85.3, name: "R SIDE BAY" },
+];
 
 /// The F-22A's M61A2 Vulcan: 480 rounds (Wikipedia's F-22A specifications,
 /// "1× 20 mm M61A2 Vulcan rotary cannon, 480 rounds",
@@ -473,6 +515,14 @@ mod tests {
         // The wing in the flight and damage models is the one drawn.
         let tip = wing_sect(W_X1);
         assert!((tip.le.y - -0.105).abs() < 0.03 && (tip.le.z - 2.505).abs() < 0.05 && (tip.c - 1.67).abs() < 0.03, "{:?} {}", tip.le, tip.c);
+    }
+
+    #[test]
+    fn missile_pieces_are_in_the_model() {
+        let m = build();
+        for st in &MISSILES {
+            assert!(m.pieces.iter().any(|p| p.name == st.piece), "missing {}", st.piece);
+        }
     }
 
     #[test]

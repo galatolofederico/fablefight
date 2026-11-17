@@ -372,13 +372,19 @@ pub struct Gun {
     pub dispersion: f64,
 }
 
-/// A heat-seeking missile on a hardpoint: the model piece that is the loaded
-/// missile (the game hides it when fired and draws it as the projectile), the
-/// wing it hangs from (0 left, 1 right), and what the HUD calls it.
+/// A missile on a hardpoint: the model piece that is the loaded missile (the
+/// game hides it when fired and draws it as the projectile), the airframe
+/// group it hangs from, which side that is when it is a wing store, its mass
+/// with a full motor (kg), and what the HUD calls it.
 #[derive(Clone, Copy, Debug)]
 pub struct MissileStation {
     pub piece: &'static str,
+    /// 0 left, 1 right (which wing): only used when `group` is a wing.
     pub side: usize,
+    /// The breakable group the piece belongs to (`airframe::G_*`): a wing
+    /// store is lost with its wing, a fuselage store is not.
+    pub group: usize,
+    pub mass: f32,
     pub name: &'static str,
 }
 
@@ -457,7 +463,8 @@ pub struct Spec {
     pub hole: Hole,
 
     // ---- mass and aerodynamics
-    /// mass with the tanks half full (kg); the fuel on board adds or takes away from it
+    /// mass with the tanks half full (kg), without the missiles; the fuel on
+    /// board adds or takes away from it
     pub mass: f64,
     /// usable fuel with the tanks full (kg), and what the engines burn
     /// together (kg/s): idling, at full dry power, and with the boost (afterburners)
@@ -563,10 +570,24 @@ impl std::fmt::Debug for Spec {
 }
 
 impl Spec {
-    /// The heat-seeking missiles it carries, if any. (Only the Hornet has
-    /// them modelled; other types get an empty list.)
+    /// The missiles it carries, if any: six air-to-air stations on each of the
+    /// three fighters (two wingtip/ side-bay Sidewinders and four AMRAAM or
+    /// Sparrow stations), none on a type flown with a borrowed stand-in body.
     pub fn missiles(&self) -> &'static [MissileStation] {
-        if self.keys.contains(&"fa18") { &fa18::MISSILES } else { &[] }
+        if self.keys.contains(&"fa18") {
+            &fa18::MISSILES
+        } else if self.keys.contains(&"f4") {
+            &f4::MISSILES
+        } else if self.keys.contains(&"f22") {
+            &f22::MISSILES
+        } else {
+            &[]
+        }
+    }
+
+    /// The mass of a full missile load (kg), for `Plane::mass()`.
+    pub fn store_mass(&self) -> f64 {
+        self.missiles().iter().map(|m| m.mass as f64).sum()
     }
 
     /// The cannon it carries, if any. The three fighters fire the M61 Vulcan
@@ -624,5 +645,15 @@ mod tests {
         for retired in [0, 1, 5, 6, 7, 8] {
             assert!(!BUILTIN.iter().any(|s| s.id == retired), "retired id {retired} is still in BUILTIN");
         }
+    }
+
+    #[test]
+    fn each_fighter_returns_six_missile_stations() {
+        for spec in BUILTIN {
+            assert_eq!(spec.missiles().len(), 6, "{}", spec.name);
+        }
+        // A retired or borrowed type has none, and adds no store mass.
+        assert!(c172::SPEC.missiles().is_empty());
+        assert_eq!(c172::SPEC.store_mass(), 0.0);
     }
 }

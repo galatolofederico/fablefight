@@ -90,6 +90,8 @@ MATS = {
     "steel": (3, 0, (0.32, 0.32, 0.33), 0),
     "rubber": (4, 0, (0.018, 0.018, 0.02), 0),
     "hub": (0, 0, (0.70, 0.70, 0.68), 0),
+    "missile": (0, 0, (0.70, 0.70, 0.68), 0),
+    "seeker": (10, 0, (0.04, 0.04, 0.05), 0),
     "nav_red": (8, 0, (1.0, 0.06, 0.05), 0),
     "nav_green": (8, 0, (0.05, 1.0, 0.25), 1),
     "tail_white": (8, 0, (1.0, 1.0, 1.0), 2),
@@ -771,6 +773,71 @@ def wings():
         g.finish(side + " nav light", smooth=10)
 
 
+def amraam(name, x, y, z):
+    """An AIM-120C-5 in the main bay: 3.65 m long, 0.178 m across, its centre
+    on a trapeze below the belly line so it shows with the doors open."""
+    ctr = V((x, y, z))
+    tail = ctr - V((0, 1.825, 0))
+    g = Geo()
+    lathe(g, tail, V((0, 1, 0)), [(0.0, 0.0), (0.089, 0.02), (0.089, 3.20), (0.080, 3.35), (0.050, 3.53), (0.0, 3.65)], "missile", n=16)
+    for k in range(4):
+        a = math.radians(45 + 90 * k)
+        d = V((math.cos(a), 0, math.sin(a)))
+        for yc, span, chord in ((0.28, 0.17, 0.50), (1.75, 0.09, 0.60)):
+            g.box(tail + V((0, yc, 0)) + d * (0.089 + span / 2), (span / 2, chord / 2, 0.005), "missile", (d, V((0, 1, 0)), d.cross(V((0, 1, 0)))))
+    g.finish(name, smooth=30, pivot=ctr)
+
+
+def sidewinder(s, side):
+    """An AIM-9M on the side bay's LAU-141/A trapeze, extended outboard:
+    3.02 m long, 0.127 m across. Pivot at its middle."""
+    ctr = V((2.25 * s, 1.0, -0.35))
+    tail = ctr - V((0, 1.51, 0))
+    g = Geo()
+    # The trapeze arm out of the bay, past the open door.
+    g.box(V((2.05 * s, 1.0, -0.30)), (0.20, 0.05, 0.035), "steel")
+    lathe(g, tail, V((0, 1, 0)), [(0.0, 0.0), (0.0635, 0.02), (0.0635, 2.72), (0.058, 2.85), (0.040, 2.95), (0.0, 3.02)], "missile", n=16)
+    for k in range(4):
+        a = math.radians(45 + 90 * k)
+        d = V((math.cos(a), 0, math.sin(a)))
+        for yc, span, chord in ((0.25, 0.20, 0.30), (2.47, 0.13, 0.22)):
+            g.box(tail + V((0, yc, 0)) + d * (0.0635 + span / 2), (span / 2, chord / 2, 0.005), "missile", (d, V((0, 1, 0)), d.cross(V((0, 1, 0)))))
+    g.finish(side + " sidewinder", smooth=30, pivot=ctr)
+
+
+def bay_doors():
+    """The main bay's two doors and the side bays' doors, modelled open. They
+    are real pieces of geometry so the stores that stand below the skin are
+    framed by a bay, not painted on it."""
+    for s, side in ((1, "right"), (-1, "left")):
+        g = Geo()
+        # A thin door panel: its edge profile is the outline and the plate is
+        # extruded along the bay, so it reads as a door rather than a box.
+        g.plate([V((0.50 * s, 0.35, -0.98)), V((0.52 * s, 0.35, -0.98)), V((0.52 * s, 0.35, -1.40)), V((0.50 * s, 0.35, -1.40))], V((0, 1, 0)), 1.85, "door_in", "door_in")
+        g.finish(side + " bay door", smooth=30)
+        g = Geo()
+        g.plate([V((1.88 * s, 1.0, -0.10)), V((1.90 * s, 1.0, -0.10)), V((1.90 * s, 1.0, -0.52)), V((1.88 * s, 1.0, -0.52))], V((0, 1, 0)), 0.75, "door_in", "door_in")
+        g.finish(side + " side bay door", smooth=30)
+
+
+def stores():
+    """The six internal missiles: four AMRAAMs across the main bay and one
+    Sidewinder on each side-bay trapeze. The stores ride below the belly with
+    the doors open, a deliberate depiction (see docs/fablefight-limitations.md);
+    the real aircraft flies with them shut. The four bay missiles are 0.27 m
+    apart across a 0.90 m wide bay, at y 0.35 m behind the datum.
+
+    This script rebuilds the aircraft from scratch and overwrites hand edits
+    to assets/blender/f22.blend (see the header); use --export-only after
+    saving a hand-edited .blend instead."""
+    bay_doors()
+    for x, name in ((-0.405, "main bay amraam 1"), (-0.135, "main bay amraam 2"), (0.135, "main bay amraam 3"), (0.405, "main bay amraam 4")):
+        z = fuse_z(0.35, x, upper=False) - 0.10
+        amraam(name, x, 0.35, z)
+    for s, side in ((1, "right"), (-1, "left")):
+        sidewinder(s, side)
+
+
 # The stabilators: the same sweeps as the wing, their leading edges tucked into
 # the wing's notch, their inboard corners the aftmost points of the aircraft.
 S_X0, S_X1, S_LE0, S_C0, S_Z, S_T = 1.75, 4.42, -5.05, 3.97, 0.05, 0.035
@@ -1073,8 +1140,8 @@ def check_gear():
 
 # ---------------------------------------------------------------- export
 # Every piece the game looks for (PIECES in src/aircraft/f22/mod.rs); other objects are ignored.
-EXPECTED = ["radome", "nose section", "fuselage", "tail cone", "canopy", "canopy frame", "tail light", "nose leg", "nose fork", "nose wheel", "afterburner"] + [
-    f"{s} {n}" for s in ("left", "right") for n in ("intake", "nozzle", "wing", "le flap", "flap", "aileron", "nav light", "stabilator", "fin", "rudder", "main leg", "main wheel", "nose door", "strut door", "main door")]
+EXPECTED = ["radome", "nose section", "fuselage", "tail cone", "canopy", "canopy frame", "tail light", "nose leg", "nose fork", "nose wheel", "afterburner", "main bay amraam 1", "main bay amraam 2", "main bay amraam 3", "main bay amraam 4"] + [
+    f"{s} {n}" for s in ("left", "right") for n in ("intake", "nozzle", "wing", "le flap", "flap", "aileron", "sidewinder", "bay door", "side bay door", "nav light", "stabilator", "fin", "rudder", "main leg", "main wheel", "nose door", "strut door", "main door")]
 
 
 def game_mat(m):
@@ -1195,7 +1262,7 @@ def render_guides(outdir):
     sc.world = world
     sh = sc.display.shading
     # Gear up: only what the paint goes on.
-    hidden = [o for o in COLL.all_objects if any(k in o.name for k in ("leg", "wheel", "fork", "door", "afterburner"))]
+    hidden = [o for o in COLL.all_objects if any(k in o.name for k in ("leg", "wheel", "fork", "door", "sidewinder", "amraam", "afterburner"))]
     for o in hidden:
         o.hide_render = True
     cam, cam_data = camera()
@@ -1250,6 +1317,7 @@ def main():
         nozzles()
         canopy()
         wings()
+        stores()
         tail()
         gear()
         doors()

@@ -773,16 +773,47 @@ def pair_axis(right_axis, s):
     return right_axis if s > 0 else -M(right_axis, -1)
 
 
+def wing_under(x, y, s):
+    """Height of the wing's lower skin at span station x, station y."""
+    le, c, cdir, up = wing_sect(s)(x)
+    xc = max(0.0, min(1.0, (le.y - y) / c))
+    return le.z - max(c * naca_t(xc, W_T), 0.004) * up.z
+
+
 def pylon(g, s, x):
-    """A stores pylon under the wing at span station x."""
+    """A stores pylon under the wing at span station x. Its top follows the
+    lower skin, a little inside it, so it cannot poke through the upper wing."""
     le, c, _, _ = wing_sect(s)(x)
-    zt = le.z + 0.01
     y0 = le.y - 0.40
     rings = []
-    for dy, depth, w in ((0.0, 0.03, 0.012), (-0.22, 0.20, 0.036), (-0.55, 0.30, 0.042), (-1.45, 0.30, 0.042), (-1.75, 0.16, 0.030), (-1.95, 0.03, 0.012)):
+    for dy, depth, w in ((0.0, 0.03, 0.012), (-0.22, 0.20, 0.036), (-0.55, 0.38, 0.042), (-1.45, 0.38, 0.042), (-1.75, 0.16, 0.030), (-1.95, 0.03, 0.012)):
         y = y0 + dy
+        zt = wing_under(x, y, s) + 0.02
         rings.append([V((x * s - w, y, zt)), V((x * s + w, y, zt)), V((x * s + w, y, zt - depth)), V((x * s - w, y, zt - depth))])
     g.loft(rings, "skin")
+
+
+def amraam(s, side, x, where):
+    """An AIM-120C-5 on the pylon at span station x: 3.65 m long, 0.178 m
+    across, hung under the pylon's 0.38 m depth. Its pivot is its middle, where
+    the game launches it from. (The pylon span stations are the model's own,
+    already in `wings`: 2.35 m inboard and 3.55 m outboard, the real aircraft's
+    stations 3 and 2; the 5.75 m tip rails are stations 1 and 9.)"""
+    le, _, _, _ = wing_sect(s)(x)
+    y0 = le.y - 0.40
+    # Far enough forward and low enough that the tail fins clear the flap and
+    # aileron at full travel (the fins sit ahead of their trailing edges).
+    yc = y0 - 1.03
+    tail = V((x * s, yc - 1.825, wing_under(x, yc, s) - 0.38 - 0.03 - 0.089))
+    g = Geo()
+    lathe(g, tail, V((0, 1, 0)), [(0.0, 0.0), (0.089, 0.02), (0.089, 3.20), (0.080, 3.35), (0.050, 3.53), (0.0, 3.65)], "missile", n=16)
+    for k in range(4):
+        a = math.radians(45 + 90 * k)
+        d = V((math.cos(a), 0, math.sin(a)))
+        # tail fins, then the long mid-body strakes that carry it on the rail
+        for yf, span, chord in ((0.28, 0.17, 0.50), (1.75, 0.09, 0.60)):
+            g.box(tail + V((0, yf, 0)) + d * (0.089 + span / 2), (span / 2, chord / 2, 0.005), "missile", (d, V((0, 1, 0)), d.cross(V((0, 1, 0)))))
+    g.finish(side + " " + where + " amraam", smooth=30, pivot=tail + V((0, 1.825, 0)))
 
 
 def wings():
@@ -833,6 +864,20 @@ def wings():
         g = Geo()
         g.box(V((5.70 * s, -1.38, -0.125)), (0.035, 0.05, 0.022), "nav_green" if s > 0 else "nav_red")
         g.finish(side + " nav light", smooth=10)
+
+
+def stores():
+    """The six air-to-air missiles: the wingtip Sidewinders are built with the
+    tip rails in `wings()`; here are the four underwing AMRAAMs on the pylons
+    there. The real F/A-18C can carry 2 Sidewinders and 4 AMRAAMs on its five
+    wing stations, with the fuselage and centreline stations empty.
+
+    This script rebuilds the aircraft from scratch and overwrites hand edits
+    to assets/blender/fa18.blend (see the header); use --export-only after
+    saving a hand-edited .blend instead."""
+    for s, side in ((1, "right"), (-1, "left")):
+        amraam(s, side, 2.35, "inboard")
+        amraam(s, side, 3.55, "outboard")
 
 
 def stab_sect(s):
@@ -1184,7 +1229,7 @@ def check_gear():
 # ---------------------------------------------------------------- export
 # Every piece the game looks for (PIECES in src/aircraft/fa18/mod.rs); other objects are ignored.
 EXPECTED = ["radome", "nose section", "fuselage", "tail cone", "spine", "canopy", "canopy frame", "speedbrake", "tail light", "nose leg", "nose fork", "nose wheel", "afterburner"] + [
-    f"{s} {n}" for s in ("left", "right") for n in ("intake", "lex", "nozzle", "wing", "le flap", "flap", "aileron", "tip rail", "sidewinder", "nav light", "stabilator", "fin", "rudder", "main leg", "main strut", "main wheel", "nose door", "strut door", "main door")]
+    f"{s} {n}" for s in ("left", "right") for n in ("intake", "lex", "nozzle", "wing", "le flap", "flap", "aileron", "tip rail", "sidewinder", "inboard amraam", "outboard amraam", "nav light", "stabilator", "fin", "rudder", "main leg", "main strut", "main wheel", "nose door", "strut door", "main door")]
 
 
 def game_mat(m):
@@ -1299,7 +1344,7 @@ def render_guides(outdir):
     sc.world = world
     sh = sc.display.shading
     # Gear up and nothing on the rails: only what the paint goes on.
-    hidden = [o for o in COLL.all_objects if any(k in o.name for k in ("leg", "strut", "wheel", "fork", "door", "tip rail", "sidewinder", "afterburner"))]
+    hidden = [o for o in COLL.all_objects if any(k in o.name for k in ("leg", "strut", "wheel", "fork", "door", "tip rail", "sidewinder", "amraam", "afterburner"))]
     for o in hidden:
         o.hide_render = True
     cam, cam_data = camera()
@@ -1354,6 +1399,7 @@ def main():
         nozzles()
         canopy()
         wings()
+        stores()
         tail()
         gear()
         doors()

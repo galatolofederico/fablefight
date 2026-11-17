@@ -189,6 +189,10 @@ const PIECES: &[(&str, usize, Role, Option<&str>)] = &[
     ("right tip rail", G_RWING, Role::Other, None),
     ("left sidewinder", G_LWING, Role::Other, None),
     ("right sidewinder", G_RWING, Role::Other, None),
+    ("left outboard amraam", G_LWING, Role::Other, None),
+    ("right outboard amraam", G_RWING, Role::Other, None),
+    ("left inboard amraam", G_LWING, Role::Other, None),
+    ("right inboard amraam", G_RWING, Role::Other, None),
     ("left nav light", G_LWING, Role::Other, None),
     ("right nav light", G_RWING, Role::Other, None),
     ("left stabilator", G_TAIL, Role::Elevator, None),
@@ -321,10 +325,28 @@ const fn main_leg(x: f64, name: &'static str, kick: f64) -> Leg {
     }
 }
 
-/// Its two wingtip Sidewinders (the pieces split out of the tip rails).
-pub static MISSILES: [MissileStation; 2] = [
-    MissileStation { piece: "left sidewinder", side: 0, name: "L WINGTIP" },
-    MissileStation { piece: "right sidewinder", side: 1, name: "R WINGTIP" },
+/// Its six air-to-air missiles: a wingtip rail each side, and a pylon pair
+/// under each wing. The wingtip Sidewinders are the model's existing pieces;
+/// the four underwing stores are AIM-120C-5 AMRAAMs on the pylons already in
+/// `wings()` at 2.35 m (inboard) and 3.55 m (outboard) from the centreline,
+/// with the rails at the 5.75 m tips. They correspond to the aircraft's
+/// stations 3, 2, 1 and 9. That is one of the F/A-18C's real six-missile fits
+/// (2 × AIM-9 + 4 × AIM-120); the fuselage and centreline stations are empty.
+///
+/// Store masses with a full motor: AIM-9X 85.3 kg (188 lb) and AIM-120C-5
+/// 161.5 kg (356 lb)
+/// (<https://en.wikipedia.org/wiki/AIM-9_Sidewinder>,
+/// <https://en.wikipedia.org/wiki/AIM-120_AMRAAM>). The pylon span stations
+/// are the model's existing ones, carried over unchanged: 2.35 m inboard and
+/// 3.55 m outboard. No exact span dimension was available, so the store
+/// positions follow the model's proportions rather than a quoted drawing.
+pub static MISSILES: [MissileStation; 6] = [
+    MissileStation { piece: "left sidewinder", side: 0, group: G_LWING, mass: 85.3, name: "L TIP" },
+    MissileStation { piece: "right sidewinder", side: 1, group: G_RWING, mass: 85.3, name: "R TIP" },
+    MissileStation { piece: "left outboard amraam", side: 0, group: G_LWING, mass: 161.5, name: "L OUTBD" },
+    MissileStation { piece: "right outboard amraam", side: 1, group: G_RWING, mass: 161.5, name: "R OUTBD" },
+    MissileStation { piece: "left inboard amraam", side: 0, group: G_LWING, mass: 161.5, name: "L INBD" },
+    MissileStation { piece: "right inboard amraam", side: 1, group: G_RWING, mass: 161.5, name: "R INBD" },
 ];
 
 /// The F/A-18C's M61A1 Vulcan: 578 rounds (Wikipedia's F/A-18C/D

@@ -95,6 +95,8 @@ MATS = {
     "steel": (3, 0, (0.32, 0.32, 0.33), 0),
     "rubber": (4, 0, (0.018, 0.018, 0.02), 0),
     "hub": (0, 0, (0.70, 0.70, 0.68), 0),
+    "missile": (0, 0, (0.70, 0.70, 0.68), 0),
+    "seeker": (10, 0, (0.04, 0.04, 0.05), 0),
     "nav_red": (8, 0, (1.0, 0.06, 0.05), 0),
     "nav_green": (8, 0, (0.05, 1.0, 0.25), 1),
     "tail_white": (8, 0, (1.0, 1.0, 1.0), 2),
@@ -873,6 +875,75 @@ def wing_plate(g, s, x0, x1, y0, y1, drop, t, m, m_in, nx=6, ny=6):
     return [v for row in lo + hi for v in row]
 
 
+def pylon(g, s, x):
+    """A stores pylon under the wing at span station x (the inboard station,
+    where the F-4E carries its Sidewinders)."""
+    le, c, _, _ = wing_sect(s, False)(x)
+    zt = le.z + 0.01
+    y0 = le.y - 0.45
+    rings = []
+    for dy, depth, w in ((0.0, 0.03, 0.014), (-0.18, 0.20, 0.040), (-0.45, 0.30, 0.050), (-1.25, 0.30, 0.050), (-1.55, 0.16, 0.035), (-1.75, 0.03, 0.014)):
+        y = y0 + dy
+        rings.append([V((x * s - w, y, zt)), V((x * s + w, y, zt)), V((x * s + w, y, zt - depth)), V((x * s - w, y, zt - depth))])
+    g.loft(rings, "skin")
+
+
+def sidewinder(s, side):
+    """An AIM-9J on a LAU-7 rail on the outboard side of the inboard pylon:
+    3.05 m long, 0.127 m across. Pivot at its middle."""
+    x = 3.35
+    le, _, _, _ = wing_sect(s, False)(x)
+    y0 = le.y - 0.45
+    ctr = V(((x + 0.26) * s, y0 - 0.95, le.z + 0.01 - 0.32 - 0.085))
+    tail = ctr - V((0, 1.525, 0))
+    g = Geo()
+    lathe(g, tail, V((0, 1, 0)), [(0.0, 0.0), (0.0635, 0.02), (0.0635, 2.75), (0.058, 2.88), (0.040, 2.98), (0.0, 3.05)], "missile", n=16)
+    for k in range(4):
+        a = math.radians(45 + 90 * k)
+        d = V((math.cos(a), 0, math.sin(a)))
+        for yc, span, chord in ((0.25, 0.20, 0.30), (2.50, 0.13, 0.22)):
+            g.box(tail + V((0, yc, 0)) + d * (0.0635 + span / 2), (span / 2, chord / 2, 0.005), "missile", (d, V((0, 1, 0)), d.cross(V((0, 1, 0)))))
+    g.finish(side + " sidewinder", smooth=30, pivot=ctr)
+
+
+def sparrow(name, x, y):
+    """An AIM-7E-2 in a semi-recessed fuselage well: 3.66 m long, 0.203 m
+    across. Its centre sits 9 cm below the belly line, so the body shows below
+    the skin and the lower fins clear it. The four wells are at two stations
+    fore and aft (Heatblur's F-4E stores chart: stations 3/4 forward, 6/7
+    aft); the positions here are scaled from an underside photograph against
+    the model's 19.2 m length, ±0.15 m."""
+    z = fuse_z(y, x, upper=False) - 0.09
+    ctr = V((x, y, z))
+    tail = ctr - V((0, 1.83, 0))
+    g = Geo()
+    lathe(g, tail, V((0, 1, 0)), [(0.0, 0.0), (0.1015, 0.03), (0.1015, 3.20), (0.095, 3.38), (0.060, 3.55), (0.0, 3.66)], "missile", n=16)
+    # Only the two lower fins are outside the fuselage; the upper pair rides
+    # in the recess and is not modelled (a real Sparrow's X does not show
+    # through the skin).
+    for a in (math.radians(225), math.radians(315)):
+        d = V((math.cos(a), 0, math.sin(a)))
+        # the large tail fins, then the mid-body wings
+        for yc, span, chord in ((0.35, 0.30, 0.44), (2.05, 0.16, 0.60)):
+            g.box(tail + V((0, yc, 0)) + d * (0.1015 + span / 2), (span / 2, chord / 2, 0.005), "missile", (d, V((0, 1, 0)), d.cross(V((0, 1, 0)))))
+    g.finish(name, smooth=30, pivot=ctr)
+
+
+def stores():
+    """The F-4E's six air-to-air missiles: four Sparrows in the fuselage wells
+    and one Sidewinder on each inboard pylon. (The centreline and outboard
+    stations are empty; the real jet can also carry two Sidewinders per inboard
+    pylon, and the ALE-40 flare dispensers sit on the aft ends of pylons 2/8.)
+
+    This script rebuilds the aircraft from scratch and overwrites hand edits
+    to assets/blender/f4.blend (see the header); use --export-only after
+    saving a hand-edited .blend instead."""
+    for s, side in ((1, "right"), (-1, "left")):
+        sidewinder(s, side)
+        sparrow(side + " forward sparrow", 0.45 * s, 4.05)
+        sparrow(side + " aft sparrow", 0.95 * s, -0.55)
+
+
 def wings():
     for s, side in ((1, "right"), (-1, "left")):
         wi, wo = wing_sect(s, False), wing_sect(s, True)
@@ -889,7 +960,9 @@ def wings():
         # The main well's opening, seen with its doors open.
         for x0, x1, y0, y1 in (MAIN_DOOR, LEG_DOOR):
             wing_plate(g, s, x0, x1, y0, y1, 0.002, 0.001, "well_dark", "well_dark")
-        g.finish(side + " wing")
+        # The inboard stores pylon, where the Sidewinders and ALE-40s go.
+        pylon(g, s, 3.35)
+        g.finish(side + " wing")  # (the pylon joins the wing piece)
 
         for name, sect, (x0, x1), (a, b) in (("inner le flap", wi, ILEF, (0.0, ILEF_C)), ("le flap", wo, OLEF, (0.0, OLEF_C)), ("flap", wi, FLAP, (TE_HINGE, 1.0)), ("aileron", wi, AIL, (TE_HINGE, 1.0))):
             g = Geo()
@@ -1154,7 +1227,7 @@ def check_gear():
 # ---------------------------------------------------------------- export
 # Every piece the game looks for (PIECES in src/aircraft/f4/mod.rs); other objects are ignored.
 EXPECTED = ["radome", "nose section", "fuselage", "tail cone", "spine", "canopy", "canopy frame", "fin", "rudder", "tail light", "nose leg", "nose fork", "nose wheel", "afterburner"] + [
-    f"{s} {n}" for s in ("left", "right") for n in ("intake", "nozzle", "wing", "inner le flap", "le flap", "flap", "aileron", "speedbrake", "nav light", "stabilator", "main leg", "main wheel", "nose door", "main door")]
+    f"{s} {n}" for s in ("left", "right") for n in ("intake", "nozzle", "wing", "inner le flap", "le flap", "flap", "aileron", "speedbrake", "sidewinder", "forward sparrow", "aft sparrow", "nav light", "stabilator", "main leg", "main wheel", "nose door", "main door")]
 
 
 def game_mat(m):
@@ -1269,7 +1342,7 @@ def render_guides(outdir):
     sc.world = world
     sh = sc.display.shading
     # Gear up: only what the paint goes on.
-    hidden = [o for o in COLL.all_objects if any(k in o.name for k in ("leg", "wheel", "fork", "door", "afterburner"))]
+    hidden = [o for o in COLL.all_objects if any(k in o.name for k in ("leg", "wheel", "fork", "door", "sidewinder", "sparrow", "afterburner"))]
     for o in hidden:
         o.hide_render = True
     cam, cam_data = camera()
@@ -1370,6 +1443,7 @@ def main():
         nozzles()
         canopy()
         wings()
+        stores()
         tail()
         gear()
         doors()
