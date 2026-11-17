@@ -466,7 +466,7 @@ impl crate::Game {
         ui.add_space(10.0);
 
         // What it becomes here.
-        menu::heading(ui, t!("IN FABLE FLIGHT", "DANS FABLE FLIGHT"));
+        menu::heading(ui, t!("IN FABLE FIGHT", "DANS FABLE FIGHT"));
         egui::Frame::new().fill(Color32::from_white_alpha(7)).corner_radius(8.0).inner_margin(12.0).show(ui, |ui| {
             ui.set_width(ui.available_width());
             match &i.fit {

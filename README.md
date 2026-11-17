@@ -1,13 +1,14 @@
 
 <div align="center">
 
-# FableFlight
+# FableFight
 
-### An Open-World Flight Simulator Built in Pure Rust
+### A Visual-Range Dogfight Simulator Built in Pure Rust
 
-Explore the skies with real-world weather, live air traffic, and an immersive open-world flying experience.
+Fly the F/A-18C Hornet, the F-4E Phantom II and the F-22A Raptor in a visual-range air-combat arena over the existing real terrain and streaming world: cannon, heat-seeking missiles, flares and structural damage.
 
 *Created with Claude Fable 5.2 & Opus 5.5*
+*FableFight's design and plan were drafted with DeepSeek V4.1 Flash*
 
 <br>
 
@@ -41,7 +42,12 @@ The interface is in English or French. It follows the system language, can be ch
 Any joystick, throttle, rudder pedals or wheel can be used: in Bindings (pause menu, or Settings on the start screen), bind each axis by moving it the way that means "more" (nose up, right roll, right rudder, full throttle, brake pressed) and each button to any action. Each axis has an Invert switch and a dead zone. Presets set a device up in one click; the Turtle Beach VelocityOne Flightstick and rudder pedals get theirs on their own the first time they are plugged in. Keyboard keys can be moved too. Everything is kept in `bindings.json` in the config folder.
 
 # Aircraft
-The Cessna 172RG, the Robin DR 400/180 Régent, the 747, the F/A-18, the F-4, the F-22, Concorde, the SR-71 and Starship. The Robin is the French wooden four-seater and glider tug: bubble canopy, the cranked Jodel wing, an all-moving tailplane, fixed gear and 60° flaps (`--aircraft dr400`); 6 slides its canopy open and shut. Like the Cessna it is built in code (`src/aircraft/dr400`), in a made-up classic Robin livery.
+Three fighters: the F/A-18C Hornet, the F-4E Phantom II and the F-22A Raptor. Each flies the full flight model with its own mass, engines, aerodynamics, landing gear, cockpit, sounds and damage rules. The Hornet is the default (`--aircraft fa18`); the others answer to `--aircraft f4` and `--aircraft f22`. Downloaded FlightGear aircraft remain available for free flight (see below) but are not part of the fighter roster.
+
+# Controls
+Keyboard: **W / S** pitch, **A / D** roll, **Q / E** rudder, **Shift / Ctrl** throttle, **Space** afterburner (hold), **B** wheel brakes, **F / V** flaps, **L** gear, **4** lock and cycle the target, **5** missile, **6** cannon, **7** flares, **J** padlock the camera to the target, **F5** radio navigation instruments.
+
+Gamepad: left stick pitch and roll, **LT / RT** rudder, **A / B** throttle, **X** wheel brakes, **LB** missile, **RB** cannon, **D-pad up** afterburner on / off, **D-pad down** flares, **D-pad left / right** cycle the target, **Y** padlock the camera to the target, **L3** gear, right stick look around, **View** chase / cockpit camera. Every key and button can be moved on the Bindings page.
 
 # Fuel and engine start
 The engines burn fuel as they work (the Cessna some 30 l/h at 75% power, the 747 about 10 t/h in the cruise) and the fuel weighs: full tanks fly heavier than empty ones. Choose how much to take on the start screen (Flight); the HUD, the flight panel (fuel, flow, endurance) and the cockpit gauges show what is left, with LOW FUEL / NO FUEL warnings, and a dry engine stops. Start on a runway with the engine off ("cold start", or `--cold`) and start it by hand (I magnetos, Page Up mixture, hold O for the starter; on the jets I is the fuel controls and O engages the starters) or with F4, which also shuts it down. A windmilling engine with fuel and ignition catches again in the air; shut down on the ground, compression stops it within seconds.
@@ -61,7 +67,7 @@ Runways are highlighted in cyan using the loaded 3D airfield geometry when avail
 The minimap shares the terrain imagery and OpenFreeMap vector data caches. It loads tiles in the background, with at most one imagery and one vector request in flight, 64 satellite textures and 32 road-map tiles in memory. The road map is rasterized once per tile on a worker, not every frame, and does not request satellite images. Neither mode renders the 3D world a second time. Lower-resolution satellite tiles stand in while detail loads. Offline it uses cached data; missing imagery is indicated, and place names require cached vector tiles. The map is unavailable beyond 85 degrees latitude. Map and label data: [OpenFreeMap](https://openfreemap.org/), [OpenMapTiles](https://openmaptiles.org/), [OpenStreetMap contributors](https://www.openstreetmap.org/copyright).
 
 # Radio navigation
-VORs and NDBs from [OurAirports](https://ourairports.com/data/) (public domain), and an ILS on every paved runway end of 1500 m or more at medium and large airports. Tune NAV 1 (VOR or ILS) and the ADF on the flight panel's Radio page (Tab); J shows the instruments: a course deviation indicator with TO/FROM, the glide slope on an ILS and DME, and an ADF needle. [ and ] turn the OBS. Starting on a final approach tunes the runway's ILS. The altimeter is set to the QNH (from the METAR when the weather is real) unless you set it yourself; X sets it back. Courses are true: the world has no magnetic variation. `assets/mknav.py` rebuilds `assets/navaids.tsv.gz` from OurAirports' `navaids.csv`.
+VORs and NDBs from [OurAirports](https://ourairports.com/data/) (public domain), and an ILS on every paved runway end of 1500 m or more at medium and large airports. Tune NAV 1 (VOR or ILS) and the ADF on the flight panel's Radio page (Tab); F5 shows the instruments: a course deviation indicator with TO/FROM, the glide slope on an ILS and DME, and an ADF needle. [ and ] turn the OBS. Starting on a final approach tunes the runway's ILS. The altimeter is set to the QNH (from the METAR when the weather is real) unless you set it yourself; X sets it back. Courses are true: the world has no magnetic variation. `assets/mknav.py` rebuilds `assets/navaids.tsv.gz` from OurAirports' `navaids.csv`.
 
 # More aircraft: FlightGear's collection
 Click the aircraft picture on the start screen (or **All aircraft**) to see every aircraft you can fly as a gallery; **Get more…** opens [FlightGear's aircraft collection](https://wiki.flightgear.org/FGAddon) (its 2020 catalogue, about 650 aircraft). Pick one to read its files from FGAddon: its flight model, author, the license its JSBSim file states (else FGAddon's GNU GPL v2 or later), and what it becomes here; the ones that can't be flown are hidden once read (tick **Show all**). **Download** takes its package from a FlightGear mirror and unpacks it, without sounds, scripts and splash screens, into `~/.local/share/fablegame/aircraft/<folder>/` (with a `source.json` recording the source, revision and license), and it joins the list. Nothing from FlightGear ships with the game.
@@ -78,8 +84,10 @@ It is not flown by JSBSim or YASim: its flight model is *fitted* to ours (src/ha
 # Live air traffic
 Real aircraft around you, as reported by ADS-B receivers (data from [adsb.lol](https://adsb.lol), ODbL), fly in the sky with tags (callsign, type, altitude, speed, distance); the flight panel (Tab) lists the nearest. It can be switched off in the pause menu's Settings.
 
-# Missiles
-The F/A-18C carries its two wingtip Sidewinders. Press **3** to set Master Arm, **4** to find and lock a target (press it again to step to the next one), and **5** to fire. On a gamepad, hold **Y** and press **left** on the d-pad to arm, **Y** + **right** to lock or cycle, and release **Y** on its own at a locked target to fire. The seeker looks about 45° either side of the nose for airborne aircraft — the real ADS-B traffic and airport departures and arrivals — and needs a few seconds to build a lock; the HUD shows `TRACK` until it is solid, then `LOCK`. Armed with no lock, firing says `NO LOCK`; with Master Arm off it says `MASTER ARM OFF`. The missile leaves the rail, boosts, follows the target's heat and detonates on a proximity fuse. The rail stays, the empty wingtip is visible, and the second missile is still there. The keys can be moved on the Bindings page.
+# Weapons: cannon, missiles and flares
+Each fighter carries six heat-seeking missiles on its own stations, a 20 mm cannon and up to 30 flares. **4** finds and locks a target (press it again to step to the next one), **5** fires a missile, **6** fires the cannon and **7** deploys flares; **J** pads the camera to the target. Weapons are live whenever the aircraft has electrical power and stores: there is no master-arm step. On a gamepad, **LB** fires a missile, **RB** the cannon, **D-pad down** the flares, **D-pad left / right** cycle the target and **Y** pads the camera. The keys can be moved on the Bindings page.
+
+The seeker looks about 45° either side of the nose for airborne aircraft and needs a few seconds to build a lock; the HUD shows `TRACK` until it is solid, then `LOCK`. It locks farther away from the rear hemisphere than head-on and refuses a launch inside its minimum range. The missile leaves its station, boosts, follows the target's heat and detonates on a proximity fuse; the correct store disappears from the aircraft. Flares fall behind the aircraft and can seduce a missile that is tracking it.
 
 # Real weather
 The weather follows the real conditions where you fly: the nearest METAR within 60 km ([aviationweather.gov](https://aviationweather.gov)) sets the wind, gusts, visibility, cloud layers and thunderstorms; with no airport near, [Open-Meteo](https://open-meteo.com)'s model stands in. It is looked up again every 10 minutes or 30 km, and the sky eases into each report. Switch it off in the weather settings (start screen, flight panel or F3) to set the weather by hand.

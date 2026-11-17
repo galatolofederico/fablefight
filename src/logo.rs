@@ -1,10 +1,10 @@
-//! The "FABLE FLIGHT" title over the start screen: no box behind it, drawn
+//! The "FABLE FIGHT" title over the start screen: no box behind it, drawn
 //! as the inverse of whatever colour is under each pixel (see `fs_blit` in
 //! post.wgsl), so it reads against space, the planet and its glow alike.
 //! This rasterises its coverage mask, one byte per screen pixel.
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
 
-pub const TEXT: &str = "FABLE FLIGHT";
+pub const TEXT: &str = "FABLE FIGHT";
 
 /// A bold system sans for the title (the UI borrows the system's fonts too).
 pub fn find_font() -> Option<Vec<u8>> {
