@@ -18,6 +18,12 @@ const RADAR_CONE: f64 = 60.0f64.to_radians();
 /// The range and angle off the nose at which the pilot commits to an attack.
 const ATTACK_RANGE: f64 = 3_000.0;
 const ATTACK_CONE: f64 = 30.0f64.to_radians();
+/// The cannon's gate: the range it is worth firing at (m), and the angle off
+/// the nose the target must be inside (rad). Closer than the minimum the
+/// target fills the sight and the burst is behind it before it arrives.
+const GUN_MIN: f64 = 200.0;
+const GUN_MAX: f64 = 1_200.0;
+const GUN_CONE: f64 = 5.0f64.to_radians();
 /// Inside this range, with the player in front of it and pointing at the
 /// bandit, the pilot breaks instead of pressing on.
 const THREAT_RANGE: f64 = 2_500.0;
@@ -92,6 +98,10 @@ pub struct Pilot {
     /// The player was inside the sensor cone this step.
     pub target_seen: bool,
     pub state: AiState,
+    /// What it saw this step (where the player is and how it is moving), for
+    /// the trigger: the gun's gate is judged on the same sighting the stick
+    /// follows.
+    view: Option<TargetView>,
     /// Where the player was last seen, for a search towards the last contact.
     last_seen: Option<DVec3>,
     /// Seconds left before the pilot reacts to what it has just seen.
@@ -113,6 +123,7 @@ impl Pilot {
             skill,
             target_seen: false,
             state: AiState::Search,
+            view: None,
             last_seen: None,
             reaction_timer: 0.0,
             aim: DVec3::ZERO,
@@ -147,6 +158,7 @@ impl Pilot {
     /// The stick, rudder and throttle for this step.
     pub fn controls(&mut self, me: &Plane, seen: Option<TargetView>, h: f64) -> plane::Controls {
         self.t += h;
+        self.view = seen;
         self.reaction_timer = (self.reaction_timer - h).max(0.0);
         self.aim_timer -= h;
 
@@ -191,6 +203,15 @@ impl Pilot {
             AiState::Extend => self.extend(me, seen, up),
         };
         limit_pitch(me, c)
+    }
+
+    /// Is the cannon's trigger pulled? Only in the attack, inside the gun's
+    /// range gate, with the target near the nose. The nose already carries the
+    /// pilot's aim error (see `pursue`), and `guns` adds it to the burst's
+    /// dispersion, so no burst is the perfect lead.
+    pub fn trigger(&self) -> bool {
+        let Some(t) = self.view else { return false };
+        self.state == AiState::Attack && (GUN_MIN..=GUN_MAX).contains(&t.range) && t.angle <= GUN_CONE
     }
 
     /// Patrol, or fly towards where the player was last seen.
@@ -419,6 +440,31 @@ mod tests {
             me.step(h, &c, &world);
         }
         assert_eq!(pilot.state, AiState::Extend, "below the energy floor the pilot must extend");
+    }
+
+    #[test]
+    fn a_bandit_does_not_fire_outside_its_range_gate() {
+        let spec = &fa18::SPEC;
+        let me = Plane::spawn(spec, 0.0, 0.0, 3_000.0, 0.0, spec.cruise);
+        // In the attack, looking at a target `range` ahead (`angle` off the nose).
+        let ready = |range: f64, angle: f64| {
+            let mut p = Pilot::new(Skill::average(), 9);
+            p.state = AiState::Attack;
+            p.view = Some(TargetView { pos: me.pos + me.forward() * range, vel: me.vel, range, angle });
+            p
+        };
+        assert!(ready(600.0, 0.0).trigger(), "600 m dead ahead is a shot");
+        assert!(!ready(3_000.0, 0.0).trigger(), "3 km is outside the gun's range");
+        assert!(!ready(100.0, 0.0).trigger(), "100 m is inside the minimum range");
+        assert!(!ready(600.0, 20f64.to_radians()).trigger(), "20 degrees off the nose is not a shot");
+        // Out of the attack, it holds fire even with the sight on.
+        let mut p = ready(600.0, 0.0);
+        p.state = AiState::Pursue;
+        assert!(!p.trigger());
+        // And with no sighting at all.
+        let mut p = Pilot::new(Skill::average(), 9);
+        p.state = AiState::Attack;
+        assert!(!p.trigger());
     }
 
     #[test]
