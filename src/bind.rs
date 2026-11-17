@@ -117,7 +117,7 @@ pub const ACTIONS: &[Action] = &[
     act("flaps_up", KeyCode::KeyV, "Flaps up a notch", "Volets : rentrer d'un cran"),
     act("gear", KeyCode::KeyL, "Landing gear", "Train d'atterrissage"),
     act("speedbrake", KeyCode::Slash, "Speedbrake", "Aérofreins"),
-    act("canopy", KeyCode::Digit6, "Canopy open / shut", "Verrière : ouvrir / fermer"),
+    act("canopy", KeyCode::Digit8, "Canopy open / shut", "Verrière : ouvrir / fermer"),
     act("reversers", KeyCode::KeyZ, "Thrust reversers (hold)", "Inverseurs de poussée (maintenir)"),
     act("boost", KeyCode::Space, "Boost / afterburner", "Boost / postcombustion"),
     act("engines", KeyCode::Digit1, "Rocket: which engines burn", "Fusée : choix des moteurs allumés"),
@@ -126,13 +126,16 @@ pub const ACTIONS: &[Action] = &[
     act("master_arm", KeyCode::Digit3, "Master arm", "Armement maître"),
     act("target_lock", KeyCode::Digit4, "Lock / cycle target", "Verrouiller / changer de cible"),
     act("fire_missile", KeyCode::Digit5, "Fire missile", "Tirer un missile"),
+    act("fire_cannon", KeyCode::Digit6, "Fire cannon", "Tirer au canon"),
+    act("deploy_flares", KeyCode::Digit7, "Deploy flares", "Larguer des leurres"),
+    act("padlock", KeyCode::KeyJ, "Padlock camera to target", "Verrouiller la caméra sur la cible"),
     act("engine_auto", KeyCode::F4, "Start / stop the engine", "Démarrer / couper le moteur"),
     act("master", KeyCode::Insert, "Battery master switch", "Batterie (interrupteur général)"),
     act("ignition", KeyCode::KeyI, "Magnetos (jets: fuel controls)", "Magnétos (jets : robinets carburant)"),
     act("starter", KeyCode::KeyO, "Starter", "Démarreur"),
     act("mixture_rich", KeyCode::PageUp, "Mixture richer", "Mélange plus riche"),
     act("mixture_lean", KeyCode::PageDown, "Mixture leaner", "Mélange plus pauvre"),
-    act("nav_display", KeyCode::KeyJ, "Navigation instruments", "Instruments de navigation"),
+    act("nav_display", KeyCode::F5, "Navigation instruments", "Instruments de navigation"),
     act("obs_left", KeyCode::BracketLeft, "OBS course left", "OBS : course à gauche"),
     act("obs_right", KeyCode::BracketRight, "OBS course right", "OBS : course à droite"),
     act("baro_qnh", KeyCode::KeyX, "Altimeter to the QNH", "Caler l'altimètre au QNH"),
@@ -420,8 +423,6 @@ const ABS_RZ: u32 = ABS + 5;
 const ABS_THROTTLE: u32 = ABS + 6;
 const BTN_TRIGGER: u32 = BTN + 0x120;
 const BTN_THUMB: u32 = BTN + 0x121;
-const BTN_THUMB2: u32 = BTN + 0x122;
-const BTN_TOP: u32 = BTN + 0x123;
 const BTN_TOP2: u32 = BTN + 0x124;
 
 /// A ready-made set of bindings for a kind of device.
@@ -450,7 +451,7 @@ pub const PRESETS: &[Preset] = &[
         fr: "Turtle Beach VelocityOne Flightstick",
         names: &["velocityone flightstick"],
         axes: &[(AxisAct::Pitch, ABS_Y, 1.0, 0.05), (AxisAct::Roll, ABS_X, -1.0, 0.05), (AxisAct::Yaw, ABS_Z, 1.0, 0.08), (AxisAct::Throttle, ABS_RZ, 1.0, 0.02)],
-        buttons: &[("brakes", BTN_TRIGGER), ("camera", BTN_THUMB), ("flaps_down", BTN_THUMB2), ("flaps_up", BTN_TOP), ("gear", BTN_TOP2)],
+        buttons: &[("brakes", BTN_TRIGGER), ("camera", BTN_THUMB), ("gear", BTN_TOP2)],
     },
     // The usual HID layout (Logitech Extreme 3D, Thrustmaster T.16000M and
     // the like): X roll, Y pitch, the twist on Rz, a throttle that reads
@@ -460,7 +461,7 @@ pub const PRESETS: &[Preset] = &[
         fr: "Joystick standard (X/Y, torsion, manette des gaz)",
         names: &[],
         axes: &[(AxisAct::Pitch, ABS_Y, 1.0, 0.05), (AxisAct::Roll, ABS_X, 1.0, 0.05), (AxisAct::Yaw, ABS_RZ, 1.0, 0.08), (AxisAct::Throttle, ABS_THROTTLE, -1.0, 0.02)],
-        buttons: &[("brakes", BTN_TRIGGER), ("camera", BTN_THUMB), ("flaps_down", BTN_THUMB2), ("flaps_up", BTN_TOP), ("gear", BTN_TOP2)],
+        buttons: &[("brakes", BTN_TRIGGER), ("camera", BTN_THUMB), ("gear", BTN_TOP2)],
     },
     // Rudder pedals (Logitech/Saitek, Thrustmaster TFRP…): rudder on Rz,
     // the toe brakes on X and Y.
@@ -637,15 +638,15 @@ mod tests {
         let pitch_down = action("pitch_down").unwrap();
         let pitch_up = action("pitch_up").unwrap();
         assert_eq!(b.map_key(KeyCode::KeyW), Some(KeyCode::KeyW));
-        // Pitch down onto 7: 7 now pitches down, W does nothing.
-        b.set_key("pitch_down", KeyCode::Digit7);
-        assert_eq!(b.map_key(KeyCode::Digit7), Some(KeyCode::KeyW));
+        // Pitch down onto 9: 9 now pitches down, W does nothing.
+        b.set_key("pitch_down", KeyCode::Digit9);
+        assert_eq!(b.map_key(KeyCode::Digit9), Some(KeyCode::KeyW));
         assert_eq!(b.map_key(KeyCode::KeyW), None);
         // Pitch down onto S takes it from pitch up, which is left without a key.
         b.set_key("pitch_down", KeyCode::KeyS);
         assert_eq!(b.map_key(KeyCode::KeyS), Some(KeyCode::KeyW));
         assert_eq!(b.key_of(pitch_up), None);
-        assert_eq!(b.map_key(KeyCode::Digit7), Some(KeyCode::Digit7));
+        assert_eq!(b.map_key(KeyCode::Digit9), Some(KeyCode::Digit9));
         // Back to the defaults.
         b.reset_key("pitch_down");
         b.reset_key("pitch_up");
@@ -733,5 +734,32 @@ mod tests {
         c.read(&b.json());
         assert!(c.auto_preset(stick, "Turtle Beach VelocityOne Flightstick").is_none());
         assert_eq!(c.axes, b.axes);
+    }
+
+    #[test]
+    fn weapon_actions_keep_their_documented_default_keys() {
+        let expected = [
+            ("fire_cannon", KeyCode::Digit6),
+            ("fire_missile", KeyCode::Digit5),
+            ("deploy_flares", KeyCode::Digit7),
+            ("padlock", KeyCode::KeyJ),
+        ];
+        for (id, key) in expected {
+            let a = action(id).unwrap_or_else(|| panic!("no action {id}"));
+            assert_eq!(a.key, key, "wrong default key for {id}");
+            assert!(!a.en.is_empty() && !a.fr.is_empty(), "missing label for {id}");
+        }
+    }
+
+    #[test]
+    fn joystick_presets_leave_flaps_to_the_keyboard() {
+        for p in PRESETS {
+            for (id, _) in p.buttons {
+                assert!(*id != "flaps_down" && *id != "flaps_up", "preset {:?} still binds {id}", p.en);
+            }
+        }
+        // The actions themselves stay bindable by hand, on F and V as before.
+        assert_eq!(action("flaps_down").map(|a| a.key), Some(KeyCode::KeyF));
+        assert_eq!(action("flaps_up").map(|a| a.key), Some(KeyCode::KeyV));
     }
 }
