@@ -357,6 +357,21 @@ pub enum Sound {
     Rocket,
 }
 
+/// A cannon: what it is, how many rounds it carries, how fast it fires and how
+/// tightly it groups.
+#[derive(Clone, Copy, Debug)]
+pub struct Gun {
+    /// what the HUD calls it
+    pub name: &'static str,
+    /// rounds in the belt
+    pub rounds: u32,
+    /// rounds per minute
+    pub rpm: f64,
+    /// the radius (rad) of the circle 80% of the rounds land in: half the
+    /// manufacturer's quoted 80% diameter
+    pub dispersion: f64,
+}
+
 /// A heat-seeking missile on a hardpoint: the model piece that is the loaded
 /// missile (the game hides it when fired and draws it as the projectile), the
 /// wing it hangs from (0 left, 1 right), and what the HUD calls it.
@@ -552,6 +567,20 @@ impl Spec {
     /// them modelled; other types get an empty list.)
     pub fn missiles(&self) -> &'static [MissileStation] {
         if self.keys.contains(&"fa18") { &fa18::MISSILES } else { &[] }
+    }
+
+    /// The cannon it carries, if any. The three fighters fire the M61 Vulcan
+    /// family; downloaded types flown with our flight model have no gun.
+    pub fn gun(&self) -> Option<&'static Gun> {
+        if self.keys.contains(&"fa18") {
+            Some(&fa18::GUN)
+        } else if self.keys.contains(&"f4") {
+            Some(&f4::GUN)
+        } else if self.keys.contains(&"f22") {
+            Some(&f22::GUN)
+        } else {
+            None
+        }
     }
 
     /// Gear that never retracts (no fold rate): always down, the gear key does nothing.

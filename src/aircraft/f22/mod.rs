@@ -258,6 +258,14 @@ const fn main_leg(x: f64, name: &'static str, kick: f64) -> Leg {
     }
 }
 
+/// The F-22A's M61A2 Vulcan: 480 rounds (Wikipedia's F-22A specifications,
+/// "1× 20 mm M61A2 Vulcan rotary cannon, 480 rounds",
+/// <https://en.wikipedia.org/wiki/Lockheed_Martin_F-22_Raptor>). The lighter
+/// gun fires at the same rate as the A1, and General Dynamics quote the same
+/// 8 mrad diameter 80% dispersion circle
+/// (<https://www.gdots.com/armaments/aircraft-guns-gun-systems/m61a1/>).
+pub static GUN: Gun = Gun { name: "M61A2", rounds: 480, rpm: 6_000.0, dispersion: 0.004 };
+
 pub static SPEC: Spec = Spec {
     id: 4,
     name: "F-22A Raptor",

@@ -267,6 +267,15 @@ const fn main_leg(x: f64, name: &'static str, kick: f64) -> Leg {
     }
 }
 
+/// The F-4E's M61A1 Vulcan: 640 rounds, mounted internally under the nose
+/// (Wikipedia's F-4E specifications, "the E-model has a 20 mm M61A1 Vulcan
+/// cannon mounted internally under the nose, 640 rounds",
+/// <https://en.wikipedia.org/wiki/McDonnell_Douglas_F-4_Phantom_II>). The
+/// rate and dispersion are the gun's own, as on the Hornet's: 6,000 rounds a
+/// minute and an 8 mrad diameter 80% circle
+/// (<https://www.gdots.com/armaments/aircraft-guns-gun-systems/m61a1/>).
+pub static GUN: Gun = Gun { name: "M61A1", rounds: 640, rpm: 6_000.0, dispersion: 0.004 };
+
 pub static SPEC: Spec = Spec {
     id: 3,
     name: "F-4E Phantom II",

@@ -327,6 +327,15 @@ pub static MISSILES: [MissileStation; 2] = [
     MissileStation { piece: "right sidewinder", side: 1, name: "R WINGTIP" },
 ];
 
+/// The F/A-18C's M61A1 Vulcan: 578 rounds (Wikipedia's F/A-18C/D
+/// specifications, "1× 20 mm M61A1 Vulcan nose mounted 6-barrel rotary
+/// cannon, 578 rounds", <https://en.wikipedia.org/wiki/McDonnell_Douglas_F/A-18_Hornet>).
+/// The gun's own figures are General Dynamics': 6,000 rounds a minute, and an
+/// 8 milliradian diameter 80% dispersion circle, so 4 mrad is stored here
+/// (<https://www.gdots.com/armaments/aircraft-guns-gun-systems/m61a1/>; the
+/// same page gives the 1,030 m/s muzzle velocity `guns.rs` uses).
+pub static GUN: Gun = Gun { name: "M61A1", rounds: 578, rpm: 6_000.0, dispersion: 0.004 };
+
 pub static SPEC: Spec = Spec {
     id: 2,
     name: "F/A-18C Hornet",
