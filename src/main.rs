@@ -4,6 +4,7 @@ mod airmodels;
 mod airports;
 mod ai;
 mod approach;
+mod arena;
 mod audio;
 mod bandits;
 mod buildings;
@@ -122,6 +123,9 @@ const MOON_E: f32 = SUN_E * 0.0035;
 /// it shares memory bandwidth and power with the CPU, and the full-resolution
 /// scene is too much for it. The temporal AA and its sharpening hide most of it.
 const INTEGRATED_SCALE: f32 = 0.75;
+/// The dogfight's entry height above the ground (m): about 8,000 ft, where a
+/// visual-range fight has room to trade height for speed.
+const DOGFIGHT_AGL: f64 = 2_500.0;
 /// What a 3D tiles detail level costs, as measured over San Francisco (see
 /// docs/photorealistic-3d-tiles-plan.md).
 fn detail_hint(d: gmaps::Detail) -> &'static str {
@@ -775,6 +779,13 @@ struct Game {
     gun_target: Option<(DVec3, DVec3)>,
     /// the AI aircraft in the fight
     bandits: bandits::Bandits,
+    /// the arena: waves, the respawn timer, the tally and the kill feed
+    arena: arena::Arena,
+    /// dogfight mode: the arena is running and only the bandits are shootable
+    dogfight: bool,
+    /// what brought the player down, for the kill feed: a bandit's gun or a
+    /// collision. A crash into the ground is nobody's kill.
+    player_kill: Option<bandits::KillBy>,
     crashed: bool,
     crash: Option<Crash>,
     crash_real: f64,
@@ -937,7 +948,7 @@ struct Game {
     /// how long the aircraft has lain wrecked (unburnt), and when that was last looked at
     wreck_t: f64,
     wreck_seen: f64,
-    start_rx: Option<std::sync::mpsc::Receiver<(f64, f64, f64)>>,
+    start_rx: Option<std::sync::mpsc::Receiver<(f64, f64, f64, bool)>>,
     /// the loading screen, from the start screen into the air (see `Loading`)
     loading: Option<Loading>,
     name_rx: Option<std::sync::mpsc::Receiver<String>>,
@@ -1144,7 +1155,7 @@ impl Game {
             g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), weapon_flash: None, damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
-            start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, city_glow: 0.0, skyglow: Default::default(), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, storm_adapt: 0.0, plane, weapons, guns: guns::Guns::new(secs.to_bits() | 1), gun_target: None, bandits: bandits::Bandits::new(),
+            start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, city_glow: 0.0, skyglow: Default::default(), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, storm_adapt: 0.0, plane, weapons, guns: guns::Guns::new(secs.to_bits() | 1), gun_target: None, bandits: bandits::Bandits::new(), arena: arena::Arena::new(), dogfight: false, player_kill: None,
             airport_rx: None, hold_spot: None,
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
@@ -1457,12 +1468,20 @@ impl Game {
         self.warn_t = [-10.0; 4];
         (self.g_slow, self.was_ground, self.prev_vs, self.prev_gear, self.prev_flaps) = (1.0, false, 0.0, self.plane.gear, self.plane.flaps);
         self.gauges = gauges::Gauges::new(&self.plane, self.frame ^ 0x9e37);
-        self.weapons.reset(self.spec, &self.model.pieces);
-        self.guns.reset(self.spec);
+        // A new aircraft comes back fully armed: every station loaded, the
+        // dispenser full and the cannon's belt full.
+        arena::rearm(self.spec, &self.model.pieces, &mut self.weapons, &mut self.guns);
+        self.weapons.dogfight = self.dogfight;
         self.gun_target = None;
         self.weapon_flash = None;
-        self.bandits.reset();
-        self.spawn_bandit();
+        self.player_kill = None;
+        self.arena.respawned();
+        // The arena's fight carries on across the player's respawn: its bandits
+        // stay in the air where they were. A free flight gets its opponent back.
+        if !self.dogfight {
+            self.bandits.reset();
+            self.spawn_bandit();
+        }
     }
 
     /// Is a type's model on the GPU (or the one being flown, which always is)?
@@ -1476,7 +1495,9 @@ impl Game {
     /// type, so it shares the model already on the GPU; the hangar holds one
     /// per type, never one per bandit.
     fn spawn_bandit(&mut self) {
-        if self.bandits.alive_count() > 0 || !self.model_ready(self.spec) {
+        // In the arena the waves put the bandits up; there is no single
+        // free-flight opponent as well.
+        if self.dogfight || self.bandits.alive_count() > 0 || !self.model_ready(self.spec) {
             return;
         }
         let up = self.plane.pos.normalize();
@@ -1601,6 +1622,7 @@ impl Game {
     }
 
     fn start_airport(&mut self, idx: u32, runway: Option<String>, approach: bool, keep_local: bool) {
+        self.leave_dogfight();
         let a = &airports::Db::get().apts[idx as usize];
         self.status = t!("Preparing {} {}…", "Préparation de {} {}…", a.code(), a.name);
         self.status_until = self.real + 60.0;
@@ -2711,6 +2733,7 @@ impl Game {
 
     /// Back to the globe, looking at where we were.
     fn to_globe(&mut self) {
+        self.leave_dogfight();
         self.set_pause_menu(false);
         self.info_open = false;
         let (lat, lon, _) = geo::pos_to_lla(self.plane.pos);
@@ -2726,12 +2749,15 @@ impl Game {
         let (lat, lon, h) = geo::pos_to_lla(if self.crashed { self.crash.as_ref().map(|c| c.site).unwrap_or(self.plane.pos) } else { self.plane.pos });
         let g = self.world.ground(lat, lon).map(|g| g.h).unwrap_or(h);
         let hd = self.plane.forward().dot(geo::enu(self.plane.pos).0).atan2(self.plane.forward().dot(geo::enu(self.plane.pos).1));
-        self.respawn(lat, lon, g + 420.0, hd);
+        // In the arena a manual respawn comes back at the dogfight's own height,
+        // with the fight still running.
+        self.respawn(lat, lon, g + if self.dogfight { DOGFIGHT_AGL } else { 420.0 }, hd);
     }
 
     /// Fly from a known spot: its ground height is looked up in the background,
     /// then the aircraft appears above it (see `goto_rx`).
     fn fly_to(&mut self, lat: f64, lon: f64, name: &str) {
+        self.leave_dogfight();
         self.status = t!("Flying to {}…", "En route vers {}…", i18n::tr_owned(name));
         self.status_until = self.real + 30.0;
         let (tx, rx) = std::sync::mpsc::channel();
@@ -2823,14 +2849,19 @@ impl Game {
         self.name_rx = None;
     }
 
-    /// Menu: take off at the chosen spot (once its ground height is known).
+    /// Menu: take off at the chosen spot (once its ground height is known),
+    /// or start the arena there if the dogfight entry was chosen.
     fn begin(&mut self) {
         let Some((lat, lon)) = self.menu.pick else { return };
         if self.menu.starting {
             return;
         }
+        let dogfight = std::mem::take(&mut self.menu.dogfight);
+        // A flight begun from the globe is a free flight: the arena, if it was
+        // running, is left behind.
+        self.leave_dogfight();
         self.set_aircraft(aircraft::nth(self.menu.aircraft));
-        if let Some(i) = self.menu.airport.filter(|_| self.menu.start != menu::Start::Overhead) {
+        if let Some(i) = self.menu.airport.filter(|_| !dogfight && self.menu.start != menu::Start::Overhead) {
             self.start_airport(i, self.menu.runway.clone(), self.menu.start == menu::Start::Approach, false);
             return;
         }
@@ -2838,9 +2869,85 @@ impl Game {
         let (tx, rx) = std::sync::mpsc::channel();
         let src = self.src.clone();
         std::thread::spawn(move || {
-            let _ = tx.send((lat, lon, ground_elev(&src, lat, lon)));
+            let _ = tx.send((lat, lon, ground_elev(&src, lat, lon), dogfight));
         });
         self.start_rx = Some(rx);
+    }
+
+    /// Leave the arena (if it is running): the next flight is a free flight.
+    fn leave_dogfight(&mut self) {
+        if !self.dogfight {
+            return;
+        }
+        self.dogfight = false;
+        self.weapons.dogfight = false;
+        self.player_kill = None;
+        self.arena.reset();
+        self.bandits.reset();
+    }
+
+    /// Start the arena at the chosen spot: airborne at altitude with the first
+    /// wave 8 nm ahead. The world, its live traffic and the weather stay as
+    /// they are; they are ambience, not targets.
+    fn begin_dogfight(&mut self, lat: f64, lon: f64, elev: f64) {
+        self.dogfight = true;
+        self.weapons.dogfight = true;
+        self.bandits.reset();
+        self.respawn_at(lat, lon, elev + DOGFIGHT_AGL, self.heading, self.spec.cruise);
+        self.arena.begin();
+        self.status = t!("Dogfight: bandits 8 nm ahead", "Combat aérien : bandits à 8 NM").into();
+        self.status_until = self.real + 10.0;
+        self.flash.push((t!("WAVE 1", "VAGUE 1").into(), self.real));
+    }
+
+    /// The state the arena reads each step: where the player is, which way it
+    /// points, and whether it is still flying.
+    fn player_state(&self) -> arena::PlayerState {
+        arena::PlayerState {
+            pos: self.plane.pos,
+            forward: self.plane.forward(),
+            destroyed: self.crashed || self.plane.wrecked(),
+            cause: self.player_kill,
+        }
+    }
+
+    /// One step of the arena: record what went down, put the next wave's
+    /// bandits in the air, and run the respawn timer. Returns true when the
+    /// player's replacement aircraft is due.
+    fn arena_step(&mut self, h: f64) -> bool {
+        let ps = self.player_state();
+        let events = self.arena.step(h, &mut self.bandits, &ps);
+        let mut respawn = false;
+        for ev in events {
+            match ev {
+                arena::Event::Spawn { pos, dir } => {
+                    // The bandits fly the player's type, whose model is already
+                    // on the GPU, so a spawn never has to wait for a build.
+                    debug_assert!(self.model_ready(self.spec));
+                    let i = self.bandits.spawn(self.spec, pos, dir, self.spec.cruise);
+                    self.guns.bandit_spawned(i as u32, self.spec);
+                }
+                arena::Event::Wave(n) => {
+                    self.flash.push((t!("WAVE {}", "VAGUE {}", n).into(), self.real));
+                }
+                arena::Event::Respawn => respawn = true,
+            }
+        }
+        respawn
+    }
+
+    /// Put the player back in the fight when the arena's eight seconds are up:
+    /// airborne over the crash site at the dogfight's height, with full stores,
+    /// a full dispenser and a full cannon belt.
+    fn respawn_arena(&mut self) {
+        let at = if self.crashed { self.crash.as_ref().map(|c| c.site).unwrap_or(self.plane.pos) } else { self.plane.pos };
+        let (lat, lon, _) = geo::pos_to_lla(at);
+        let g = self.world.ground(lat, lon).map(|g| g.h).unwrap_or(0.0);
+        let (e, n, _) = geo::enu(self.plane.pos);
+        let hd = self.plane.forward().dot(e).atan2(self.plane.forward().dot(n));
+        self.respawn_at(lat, lon, g + DOGFIGHT_AGL, hd, self.spec.cruise);
+        self.status = t!("Respawned: bandits still up", "Réapparu : bandits en vol").into();
+        self.status_until = self.real + 4.0;
     }
 
     /// Particles live in a frame anchored near the action; move it if the action has moved on.
@@ -2867,9 +2974,11 @@ impl Game {
             return;
         }
         // The player's aircraft is wrecked too: the collision tears the
-        // airframe up and stops the engine.
+        // airframe up and stops the engine. The arena attributes the player's
+        // death to the collision.
         self.plane.dmg.hull = 1.0;
         self.plane.dmg.engine = 0.0;
+        self.player_kill = Some(bandits::KillBy::Collision);
         self.plane.cause = "MID-AIR COLLISION";
         self.plane.omega += DVec3::new(1.2, 0.6, -2.4);
         self.plane.dmg.vibe = 2.0;
@@ -2879,7 +2988,11 @@ impl Game {
         if let Some(a) = &self.audio {
             a.boom(1.5);
         }
-        self.flash.push((t!("MID-AIR COLLISION", "COLLISION EN VOL").into(), self.real));
+        // The arena's feed carries the mid-air in a dogfight; the flash is for
+        // free flight, where there is no feed.
+        if !self.dogfight {
+            self.flash.push((t!("MID-AIR COLLISION", "COLLISION EN VOL").into(), self.real));
+        }
     }
 
     /// A cannon round leaving a muzzle or striking an aircraft: the flash, the
@@ -2955,7 +3068,16 @@ impl Game {
                     self.weapon_flash = Some((at, 0.9, self.real));
                     let label = self.bandits.get(i as usize).map(|b| b.label.clone()).unwrap_or_default();
                     let msg = if label.is_empty() { t!("GUN KILL", "ABATTU AU CANON").to_string() } else { t!("GUN KILL  {}", "ABATTU AU CANON  {}", label) };
-                    self.flash.push((msg, self.real));
+                    // The arena's kill feed says it in a dogfight; the flash is
+                    // for free flight.
+                    if !self.dogfight {
+                        self.flash.push((msg, self.real));
+                    }
+                }
+                if kill && on == guns::Shooter::Player {
+                    // The arena attributes the player's death to the gun and
+                    // puts the line in its kill feed.
+                    self.player_kill = Some(bandits::KillBy::Gun);
                 }
             }
         }
@@ -3028,7 +3150,11 @@ impl Game {
                     };
                     if hit {
                         let msg = if label.is_empty() { t!("SPLASH", "ABATTU").to_string() } else { t!("SPLASH  {}", "ABATTU  {}", label) };
-                        self.flash.push((msg, self.real));
+                        // The arena's kill feed says it in a dogfight; the flash
+                        // is for free flight.
+                        if !self.dogfight {
+                            self.flash.push((msg, self.real));
+                        }
                     }
                 }
             }
@@ -3441,12 +3567,16 @@ impl Game {
             }
         }
         if let Some(rx) = &self.start_rx {
-            if let Ok((lat, lon, elev)) = rx.try_recv() {
+            if let Ok((lat, lon, elev, dogfight)) = rx.try_recv() {
                 self.start_rx = None;
                 self.utc = (self.menu.hour - lon / 15.0).rem_euclid(24.0);
-                self.respawn(lat.to_radians(), lon.to_radians(), elev + self.menu.start_agl, self.heading);
-                self.status = self.menu.pick_name.clone();
-                self.status_until = self.real + 10.0;
+                if dogfight {
+                    self.begin_dogfight(lat.to_radians(), lon.to_radians(), elev);
+                } else {
+                    self.respawn(lat.to_radians(), lon.to_radians(), elev + self.menu.start_agl, self.heading);
+                    self.status = self.menu.pick_name.clone();
+                    self.status_until = self.real + 10.0;
+                }
                 self.loading = Some(Loading::new(self.real));
                 self.mode = Mode::Fly;
                 self.menu.starting = false;
@@ -3534,10 +3664,18 @@ impl Game {
         let mut emit = Vec::new();
         let mut femit: Vec<(DVec3, render::Particle)> = Vec::new();
         let (mut scrape_n, mut steps) = (0usize, 0usize);
+        // Set by the arena when the player's eight seconds are up; the new
+        // aircraft is put in after the step loop (it resets `acc`).
+        let mut arena_respawn = false;
+        // Whether the player's aircraft was already down when this frame
+        // began: only then does the crash block below own the fixed step.
+        let was_crashed = self.crashed;
         if !self.crashed && !in_menu {
             // The live and airport traffic is gathered once a frame; the
-            // bandits' positions are refreshed every fixed step below.
-            let mut weapon_targets = if !self.weapons.has_weapons() {
+            // bandits' positions are refreshed every fixed step below. In
+            // dogfight mode the traffic is ambience: the arena's bandits are
+            // the only targets, and the weapons would refuse it anyway.
+            let mut weapon_targets = if !self.weapons.has_weapons() || self.dogfight {
                 Vec::new()
             } else {
                 let mut t = self.live.targets();
@@ -3597,6 +3735,11 @@ impl Game {
                 }
                 for ev in self.weapons.step(h, &mut self.plane, &weapon_targets, &self.world, powered) {
                     self.weapon_event(ev, &mut femit);
+                }
+                // The arena's own clock: credits from this step's kills, the
+                // player's death, the next wave and the respawn timer.
+                if self.dogfight && self.arena_step(h) {
+                    arena_respawn = true;
                 }
                 // What the pipper needs of the locked target: where it is and
                 // how it is moving, from the same list the seeker saw.
@@ -3739,6 +3882,31 @@ impl Game {
                     break;
                 }
             }
+        }
+        // In a dogfight the fight does not freeze on the player's wreck: the
+        // bandits keep flying and the respawn timer keeps running, on the same
+        // fixed step, while the crash camera watches.
+        if self.dogfight && was_crashed && !in_menu {
+            self.acc += dt;
+            let h = 1.0 / 180.0;
+            while self.acc >= h {
+                self.acc -= h;
+                self.bandits.step(h, &self.world, &self.plane);
+                if !self.bandits.deaths.is_empty() {
+                    let deaths: Vec<_> = self.bandits.deaths.drain(..).collect();
+                    for (at, power) in deaths {
+                        self.anchor_fx(at);
+                        self.blast_fx(at, power, 1.0, &mut femit);
+                    }
+                }
+                self.bandits.remove_gone();
+                if self.arena_step(h) {
+                    arena_respawn = true;
+                }
+            }
+        }
+        if arena_respawn {
+            self.respawn_arena();
         }
         if dt > 0.0 {
             self.destr.update(dt as f32, &self.world, &mut femit);
@@ -4666,6 +4834,7 @@ impl Game {
         let raw = self.egui_input();
         let mut go: Option<String> = None;
         let mut start = false;
+        let mut dogfight = false;
         let mut jump: Option<(f64, f64, &'static str)> = None;
         let mut airport: Option<u32> = None;
         let alt = self.menu.alt;
@@ -4877,6 +5046,12 @@ impl Game {
                                     ui.label(RichText::new(t!("Pick a place, or click the globe.", "Choisissez un lieu, ou cliquez sur le globe.")).size(13.5).color(DIM));
                                 }
                             }
+                            ui.add_space(8.0);
+                            ui.label(RichText::new(t!("Dogfight: airborne at about 8,000 ft with the first bandits 8 nm ahead.", "Combat aérien : départ à environ 8 000 ft avec les premiers bandits à 8 NM.")).size(11.5).color(DIM));
+                            let ready = self.menu.pick.is_some() && !self.menu.starting;
+                            if menu::wide_button(ui, t!("DOGFIGHT", "COMBAT AÉRIEN"), Hint::None, false, ready).clicked() {
+                                dogfight = true;
+                            }
                         });
                         padui::follow_focus(ui);
                     });
@@ -5074,6 +5249,10 @@ impl Game {
                 let _ = tx.send(geocode(&src.fetch, &q).map(|(la, lo, name)| (la, lo, 0.0, name)));
             });
             self.goto_rx = Some(rx);
+        }
+        if dogfight {
+            self.menu.dogfight = true;
+            self.begin();
         }
         if start {
             self.begin();
@@ -6088,6 +6267,24 @@ impl Game {
                     });
                 });
                 self.minimap.top = hud.response.rect.bottom();
+                // The arena: the wave, the tally, the respawn countdown and
+                // the kill feed, whose lines fade with age.
+                if self.dogfight {
+                    egui::Area::new(egui::Id::unique("arena")).anchor(Align2::RIGHT_TOP, [if self.info_open { -14.0 - 340.0 - 28.0 - 14.0 } else { -14.0 }, 14.0]).show(ctx, |ui| {
+                        panel.show(ui, |ui| {
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                            shadow(ui, t!("WAVE {}   KILLS {}   DEATHS {}", "VAGUE {}   ABATTUS {}   MORTS {}", self.arena.wave, self.arena.kills, self.arena.deaths), 16.0, white);
+                            shadow(ui, t!("BANDITS {}", "BANDITS {}", self.bandits.alive_count()), 12.0, dim);
+                            if let Some(left) = self.arena.respawn_in {
+                                shadow(ui, t!("RESPAWN IN {:.1} s", "RÉAPPARITION DANS {:.1} s", left.max(0.0)), 15.0, Color32::from_rgb(255, 190, 60));
+                            }
+                            for e in &self.arena.feed {
+                                let a = (e.alpha() * 235.0) as u8;
+                                shadow(ui, e.text.clone(), 13.0, Color32::from_rgba_unmultiplied(255, 210, 120, a));
+                            }
+                        });
+                    });
+                }
                 if let Some(lines) = &airport_hud {
                     egui::Area::new(egui::Id::unique("airport")).anchor(Align2::CENTER_TOP, [0.0, 14.0]).show(ctx, |ui| {
                         panel.show(ui, |ui| {
@@ -6184,6 +6381,55 @@ impl Game {
                     }
                 }
             }
+            // Bandits outside the view: an arrow at the edge of the screen
+            // pointing at each one, with its range, so a threat is not lost
+            // behind the cockpit frame. The seeker's target keeps its lock
+            // colour and shows closure too.
+            if let (true, Some((vp, cam))) = (self.show_hud, self.live_view) {
+                if self.bandits.alive_count() > 0 {
+                    let screen = ctx.content_rect().shrink(24.0);
+                    let centre = screen.center();
+                    let painter = ctx.layer_painter(egui::LayerId::background());
+                    for (i, b) in self.bandits.alive() {
+                        let rel = b.plane.pos - cam;
+                        let range = rel.length();
+                        if range > 40_000.0 {
+                            continue;
+                        }
+                        let c = vp * rel.as_vec3().extend(1.0);
+                        let ndc = if c.w.abs() < 1.0e-6 { egui::vec2(0.0, 1.0) } else { egui::vec2(c.x / c.w, c.y / c.w) };
+                        if c.w > 0.0 && ndc.x.abs() <= 0.92 && ndc.y.abs() <= 0.92 {
+                            continue; // in view: its own shape and the diamond show it
+                        }
+                        // Behind the camera the projection mirrors: point the
+                        // arrow the other way round the screen.
+                        let mut dir = if c.w > 0.0 { ndc } else { -ndc };
+                        if dir.length_sq() < 1.0e-6 {
+                            dir = egui::vec2(0.0, 1.0);
+                        }
+                        let dir = dir.normalized();
+                        let half = screen.size() * 0.5 - egui::vec2(40.0, 40.0);
+                        let k = (half.x / dir.x.abs().max(1.0e-3)).min(half.y / dir.y.abs().max(1.0e-3));
+                        let at = centre + dir * k;
+                        let lock = self.weapons.target == Some(weapons::TargetKey::Bandit(i as u32));
+                        let locked = lock && self.weapons.lock >= 1.0;
+                        let col = if locked { Color32::from_rgb(120, 230, 140) } else if lock { Color32::from_rgb(255, 180, 50) } else { Color32::from_rgb(255, 110, 80) };
+                        let side = egui::vec2(-dir.y, dir.x);
+                        painter.add(egui::Shape::convex_polygon(
+                            vec![at + dir * 11.0, at - dir * 7.0 + side * 7.0, at - dir * 7.0 - side * 7.0],
+                            col,
+                            egui::Stroke::NONE,
+                        ));
+                        let line = match (&self.weapons.target_view, locked) {
+                            (Some(v), true) => format!("{}  {:.1} km  {:+.0} m/s", b.label, v.range / 1000.0, v.closure),
+                            _ => format!("{}  {:.1} km", b.label, range / 1000.0),
+                        };
+                        let pos = at - dir * 24.0;
+                        painter.text(pos + egui::vec2(1.0, 1.0), Align2::CENTER_CENTER, &line, FontId::monospace(11.0), Color32::from_black_alpha(180));
+                        painter.text(pos, Align2::CENTER_CENTER, &line, FontId::monospace(11.0), col);
+                    }
+                }
+            }
             // The gun's pipper: where a round must be sent to meet the locked
             // target, led from its range and motion.
             if let (true, Some((vp, cam))) = (self.show_hud, self.live_view) {
@@ -6268,7 +6514,7 @@ impl Game {
             }
             let report = if self.crashed { Vec::new() } else { p.dmg.report() };
             if self.show_hud && (!warn.is_empty() || !report.is_empty()) {
-                egui::Area::new(egui::Id::unique("damage")).anchor(Align2::RIGHT_TOP, [if self.info_open { -14.0 - 340.0 - 28.0 - 14.0 } else { -14.0 }, 14.0]).show(ctx, |ui| {
+                egui::Area::new(egui::Id::unique("damage")).anchor(Align2::RIGHT_TOP, [if self.info_open { -14.0 - 340.0 - 28.0 - 14.0 } else { -14.0 }, if self.dogfight { 14.0 + 190.0 } else { 14.0 }]).show(ctx, |ui| {
                     panel.show(ui, |ui| {
                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                         for (w, col) in &warn {
