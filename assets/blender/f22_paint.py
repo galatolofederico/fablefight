@@ -23,6 +23,8 @@
 # the four laid side by side, nose up: top | bottom | left side | right side.
 # The right side's picture is mirrored first, so both sides are read the same
 # way (across: height; down: station) and lettering reads properly on each.
+# The enemy's fictional aggressor livery (AGGRESSOR_* below) is derived from
+# the same pictures and laid after them in the same order.
 import os
 import sys
 
@@ -34,6 +36,17 @@ ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
 BAKE_ONLY = "--bake-only" in sys.argv
 SRC = ARGS[0] if len(ARGS) > 0 else os.path.join(HERE, "f22_paint")
 OUT = ARGS[1] if len(ARGS) > 1 else os.path.join(os.path.dirname(HERE), "f22_paint.jpg")
+
+# ---------------------------------------------------------------- the enemy livery
+# A fictional aggressor scheme, not a real unit's: the Raptor's greys turned to
+# a dark blue-grey, with red wingtips and a red band behind the radome. (The
+# game selects it for bandits; docs/fablefight-limitations.md records it as
+# fictional.)
+AGGRESSOR_DARK = (34, 39, 47)
+AGGRESSOR_LIGHT = (126, 136, 148)
+AGGRESSOR_RED = (142, 26, 26)
+AGGRESSOR_TIP = 6.40   # span station (m) beyond which a wingtip is red
+AGGRESSOR_NOSE = (8.10, 9.00)  # station band (m) behind the radome
 
 # The rectangles the pictures cover (m), as GUIDE_* in f22.py.
 SPAN, LEN, MID_Y, MID_Z, PX = 14.4, 21.6, 0.4, 1.0, 1536
@@ -668,9 +681,29 @@ def spread(rgb, ok, rounds=128):
     return rgb
 
 
-def layer(view):
+def enemy(view):
+    """The fictional aggressor livery over the painted picture: dark blue-grey,
+    red wingtips and a red band behind the radome."""
+    v = View(view)
+    rgb = np.asarray(Image.open(os.path.join(SRC, view + ".png")).convert("RGB"), np.float32)
+    if rgb.shape[:2] != v.mask.shape:
+        rgb = np.asarray(Image.fromarray(rgb.astype(np.uint8)).resize((v.w, v.h), Image.LANCZOS), np.float32)
+    # The player's paint's brightness drives the new scheme, so its panel
+    # lines, weathering and markings stay where they were.
+    lum = np.clip((rgb @ np.array([0.30, 0.59, 0.11], np.float32)) / 255.0, 0.0, 1.0)
+    dark, light = (np.asarray(c, np.float32) for c in (AGGRESSOR_DARK, AGGRESSOR_LIGHT))
+    rgb = dark + (light - dark) * (lum ** 0.85)[..., None]
+    station = v.b if v.flat else v.a
+    band = (station > AGGRESSOR_NOSE[0]) & (station < AGGRESSOR_NOSE[1])
+    tips = (np.abs(v.a) > AGGRESSOR_TIP) if v.flat else np.zeros_like(v.mask)
+    rgb = np.where(((tips | band) & v.mask)[..., None], np.asarray(AGGRESSOR_RED, np.float32), rgb)
+    rgb = np.where(v.mask[..., None], rgb, 255.0)
+    return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+
+
+def layer(view, pic=None):
     mask = Image.open(os.path.join(SRC, view + "_mask.png")).convert("L")
-    pic = Image.open(os.path.join(SRC, view + ".png")).convert("RGB")
+    pic = pic if pic is not None else Image.open(os.path.join(SRC, view + ".png")).convert("RGB")
     if pic.size != mask.size:
         pic = pic.resize(mask.size, Image.LANCZOS)
     rgb = np.asarray(pic)
@@ -687,14 +720,18 @@ VIEWS = ("top", "bottom", "side", "right")
 if not BAKE_ONLY:
     for name in VIEWS:
         paint(name)
+enemy_pics = {name: enemy(name) for name in VIEWS}
 top, bottom, side, right = (layer(n) for n in VIEWS)
+etop, ebottom, eside, eright = (layer(n, enemy_pics[n]) for n in VIEWS)
 # Nose up, like the other two: the left side turned, the right side mirrored and turned the same way.
 side = side.transpose(Image.Transpose.ROTATE_270)
 right = right.transpose(Image.Transpose.FLIP_LEFT_RIGHT).transpose(Image.Transpose.ROTATE_270)
-assert top.size == bottom.size == side.size == right.size, (top.size, bottom.size, side.size, right.size)
+eside = eside.transpose(Image.Transpose.ROTATE_270)
+eright = eright.transpose(Image.Transpose.FLIP_LEFT_RIGHT).transpose(Image.Transpose.ROTATE_270)
+assert top.size == bottom.size == side.size == right.size == etop.size == ebottom.size == eside.size == eright.size, (top.size, bottom.size, side.size, right.size)
 w, h = top.size
-atlas = Image.new("RGB", (w * 4, h))
-for k, im in enumerate((top, bottom, side, right)):
+atlas = Image.new("RGB", (w * 8, h))
+for k, im in enumerate((top, bottom, side, right, etop, ebottom, eside, eright)):
     atlas.paste(im, (w * k, 0))
 atlas.save(OUT, quality=92, subsampling=0)
 print("wrote", OUT, atlas.size, os.path.getsize(OUT), "bytes")

@@ -39,7 +39,9 @@
 # model's silhouette, the paint at its edge spread outward over the
 # background, and the four laid side by side, nose up: top | bottom | left |
 # right. The side views are turned so that both are laid out alike (height
-# across, the nose at the top), which is how the game looks them up.
+# across, the nose at the top), which is how the game looks them up. The
+# enemy's fictional aggressor livery (AGGRESSOR_* below) is derived from the
+# same pictures and laid after them in the same order.
 import os
 import sys
 
@@ -51,6 +53,17 @@ ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
 BAKE_ONLY = "--bake-only" in sys.argv
 SRC = ARGS[0] if ARGS else os.path.join(HERE, "f4_paint")
 OUT = ARGS[1] if len(ARGS) > 1 else os.path.join(os.path.dirname(HERE), "f4_paint.jpg")
+
+# ---------------------------------------------------------------- the enemy livery
+# A fictional aggressor scheme, not a real unit's: the Phantom's Southeast Asia
+# camouflage turned to a dark blue-grey, with red wingtips and a red band
+# behind the radome. (The game selects it for bandits;
+# docs/fablefight-limitations.md records it as fictional.)
+AGGRESSOR_DARK = (34, 39, 47)
+AGGRESSOR_LIGHT = (126, 136, 148)
+AGGRESSOR_RED = (142, 26, 26)
+AGGRESSOR_TIP = 5.45   # span station (m) beyond which a wingtip is red
+AGGRESSOR_NOSE = (7.30, 8.10)  # station band (m) behind the radome
 
 # The rectangles the pictures cover (GUIDE_* in f4.py): metres across and
 # fore and aft, the station and height at their middle, pixels per metre.
@@ -875,9 +888,28 @@ def spread(rgb, ok, rounds=128):
     return rgb
 
 
-def layer(view):
+def enemy(view):
+    """The fictional aggressor livery over the painted picture: dark blue-grey,
+    red wingtips and a red band behind the radome."""
+    v = View(view)
+    rgb = np.asarray(Image.open(os.path.join(SRC, view + ".png")).convert("RGB"), np.float32)
+    if rgb.shape[:2] != v.ok.shape:
+        rgb = np.asarray(Image.fromarray(rgb.astype(np.uint8)).resize((v.w, v.h), Image.LANCZOS), np.float32)
+    # The player's paint's brightness drives the new scheme, so its panel
+    # lines, weathering and markings stay where they were.
+    lum = np.clip((rgb @ np.array([0.30, 0.59, 0.11], np.float32)) / 255.0, 0.0, 1.0)
+    dark, light = (np.asarray(c, np.float32) for c in (AGGRESSOR_DARK, AGGRESSOR_LIGHT))
+    rgb = dark + (light - dark) * (lum ** 0.85)[..., None]
+    band = ((v.y > AGGRESSOR_NOSE[0]) & (v.y < AGGRESSOR_NOSE[1]))
+    red = band | ((np.abs(v.x) > AGGRESSOR_TIP) & v.ok)
+    rgb = np.where((red & v.ok)[..., None], np.asarray(AGGRESSOR_RED, np.float32), rgb)
+    rgb = np.where(v.ok[..., None], rgb, 255.0)
+    return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+
+
+def layer(view, pic=None):
     mask = Image.open(os.path.join(SRC, view + "_mask.png")).convert("L")
-    paint_ = Image.open(os.path.join(SRC, view + ".png")).convert("RGB")
+    paint_ = pic if pic is not None else Image.open(os.path.join(SRC, view + ".png")).convert("RGB")
     if paint_.size != mask.size:
         paint_ = paint_.resize(mask.size, Image.LANCZOS)
     rgb = np.asarray(paint_)
@@ -898,15 +930,19 @@ if not BAKE_ONLY:
             if im.mode != mode:
                 im.convert("L").point(lambda c: c if kind == "guide" else 255 * (c > 127)).convert(mode).save(path, optimize=True)
         paint(View(name))
+enemy_pics = {name: enemy(name) for name in ("top", "bottom", "side", "right")}
 top, bottom, side, right = layer("top"), layer("bottom"), layer("side"), layer("right")
+etop, ebottom, eside, eright = (layer(n, enemy_pics[n]) for n in ("top", "bottom", "side", "right"))
 # Nose up like the other two, height running left to right in both: the left
 # side is seen nose to the left, the right side nose to the right.
 side = side.transpose(Image.Transpose.ROTATE_270)
 right = right.transpose(Image.Transpose.FLIP_LEFT_RIGHT).transpose(Image.Transpose.ROTATE_270)
-assert top.size == bottom.size == side.size == right.size, (top.size, bottom.size, side.size, right.size)
+eside = eside.transpose(Image.Transpose.ROTATE_270)
+eright = eright.transpose(Image.Transpose.FLIP_LEFT_RIGHT).transpose(Image.Transpose.ROTATE_270)
+assert top.size == bottom.size == side.size == right.size == etop.size == ebottom.size == eside.size == eright.size, (top.size, bottom.size, side.size, right.size)
 w, h = top.size
-atlas = Image.new("RGB", (w * 4, h))
-for k, im in enumerate((top, bottom, side, right)):
+atlas = Image.new("RGB", (w * 8, h))
+for k, im in enumerate((top, bottom, side, right, etop, ebottom, eside, eright)):
     atlas.paste(im, (w * k, 0))
 atlas.save(OUT, quality=92, subsampling=0)
 print("wrote", OUT, atlas.size, os.path.getsize(OUT), "bytes")
