@@ -159,40 +159,40 @@ cargo run --release -- --fly-check f22
 
 ### Implementation
 
-- [ ] 4.1 Read the rebuild instructions in each of `fa18.py`, `f4.py` and `f22.py` before running them; record in a comment that a rebuild overwrites manual `.blend` edits.
-- [ ] 4.2 In `assets/blender/fa18.py`, replace the two wingtip-only stores with six stations: two tip rails and two pylon pairs, with store geometry on each.
-- [ ] 4.3 In `assets/blender/f4.py`, add pylons and six stores where the real aircraft carries them, with reference-derived placement.
-- [ ] 4.4 In `assets/blender/f22.py`, add six stores including the main weapon-bay positions, replacing the painted-on bay doors with real geometry where the stores protrude.
-- [ ] 4.5 Extend `EXPECTED` in all three scripts with the new piece names and rebuild the `.blend` and `.bin.gz` for each type.
-- [ ] 4.6 In `src/aircraft/{fa18,f4,f22}/mod.rs`, add the six `MissileStation` entries with the exported piece names, and assign each piece to its wing or fuselage group.
-- [ ] 4.7 In `src/aircraft/mod.rs`, make `Spec::missiles()` return the per-type table for all three fighters.
-- [ ] 4.8 In `src/weapons.rs`, make lock range depend on target aspect: long from the rear hemisphere, short from the nose, with the break points recorded in `docs/fablefight-limitations.md`.
-- [ ] 4.9 In `src/weapons.rs`, refuse a launch inside the minimum range and surface a distinct refusal message.
-- [ ] 4.10 In `src/weapons.rs`, implement flare dispensing on `deploy_flares`: rearward, up to 30 per aircraft, with per-step decoy rolls that rise near the target's tail and fall off with range.
-- [ ] 4.11 In `src/plane.rs` and `src/weapons.rs`, make station load state contribute to `Plane::mass()` so a full jet flies heavier and firing changes trim.
-- [ ] 4.12 Create `docs/fablefight-limitations.md` recording every deliberate approximation: magazine sizes and their sources, missile aspect ranges, minimum range, flare count and decoy probability, and the F-4E flare configuration chosen.
+- [x] 4.1 Read the rebuild instructions in each of `fa18.py`, `f4.py` and `f22.py` before running them; record in a comment that a rebuild overwrites manual `.blend` edits.
+- [x] 4.2 In `assets/blender/fa18.py`, replace the two wingtip-only stores with six stations: two tip rails and two pylon pairs, with store geometry on each.
+- [x] 4.3 In `assets/blender/f4.py`, add pylons and six stores where the real aircraft carries them, with reference-derived placement.
+- [x] 4.4 In `assets/blender/f22.py`, add six stores including the main weapon-bay positions, replacing the painted-on bay doors with real geometry where the stores protrude.
+- [x] 4.5 Extend `EXPECTED` in all three scripts with the new piece names and rebuild the `.blend` and `.bin.gz` for each type.
+- [x] 4.6 In `src/aircraft/{fa18,f4,f22}/mod.rs`, add the six `MissileStation` entries with the exported piece names, and assign each piece to its wing or fuselage group.
+- [x] 4.7 In `src/aircraft/mod.rs`, make `Spec::missiles()` return the per-type table for all three fighters.
+- [x] 4.8 In `src/weapons.rs`, make lock range depend on target aspect: long from the rear hemisphere, short from the nose, with the break points recorded in `docs/fablefight-limitations.md`.
+- [x] 4.9 In `src/weapons.rs`, refuse a launch inside the minimum range and surface a distinct refusal message.
+- [x] 4.10 In `src/weapons.rs`, implement flare dispensing on `deploy_flares`: rearward, up to 30 per aircraft, with per-step decoy rolls that rise near the target's tail and fall off with range.
+- [x] 4.11 In `src/plane.rs` and `src/weapons.rs`, make station load state contribute to `Plane::mass()` so a full jet flies heavier and firing changes trim.
+- [x] 4.12 Create `docs/fablefight-limitations.md` recording every deliberate approximation: magazine sizes and their sources, missile aspect ranges, minimum range, flare count and decoy probability, and the F-4E flare configuration chosen.
 
 ### Tests
 
-- [ ] 4.13 Add a unit test in `src/aircraft/mod.rs` asserting each fighter returns exactly six missile stations.
-- [ ] 4.14 Add a unit test in `src/weapons.rs` asserting lock range from the rear exceeds lock range head-on by the documented ratio.
-- [ ] 4.15 Add a unit test in `src/weapons.rs` asserting a launch inside the minimum range is refused with the documented reason.
-- [ ] 4.16 Add a unit test in `src/weapons.rs` asserting flare count never exceeds 30 and that dispensing with zero remaining is a no-op.
-- [ ] 4.17 Add a unit test in `src/weapons.rs` asserting decoy probability is bounded to 0..1 across the full range and aspect envelope and is monotonic in range.
-- [ ] 4.18 Add a unit test in `src/plane.rs` asserting mass drops by the documented store mass after each launch.
-- [ ] 4.19 Add a test in `src/aircraft/fa18/mod.rs` (and equivalents for `f4`, `f22`) asserting every station piece name exists in the loaded model.
+- [x] 4.13 Add a unit test in `src/aircraft/mod.rs` asserting each fighter returns exactly six missile stations.
+- [x] 4.14 Add a unit test in `src/weapons.rs` asserting lock range from the rear exceeds lock range head-on by the documented ratio.
+- [x] 4.15 Add a unit test in `src/weapons.rs` asserting a launch inside the minimum range is refused with the documented reason.
+- [x] 4.16 Add a unit test in `src/weapons.rs` asserting flare count never exceeds 30 and that dispensing with zero remaining is a no-op.
+- [x] 4.17 Add a unit test in `src/weapons.rs` asserting decoy probability is bounded to 0..1 across the full range and aspect envelope and is monotonic in range.
+- [x] 4.18 Add a unit test in `src/plane.rs` asserting mass drops by the documented store mass after each launch.
+- [x] 4.19 Add a test in `src/aircraft/fa18/mod.rs` (and equivalents for `f4`, `f22`) asserting every station piece name exists in the loaded model.
 
 ### Verification
 
-- [ ] Run `cargo check`; it exits 0.
-- [ ] Run `cargo test`; it exits 0 and all tests pass, including the seven added above.
-- [ ] Run `cargo test --test shaders`; it exits 0.
+- [x] Run `cargo check`; it exits 0.
+- [x] Run `cargo test`; it exits 0 and all tests pass, including the seven added above.
+- [x] Run `cargo test --test shaders`; it exits 0.
 - [ ] Run `cargo run --release -- --aircraft fa18`, `--aircraft f4` and `--aircraft f22`; each shows six loaded stores in the correct positions.
 - [ ] Visually inspect each aircraft's stores from front, side, top and rear exterior views and from the cockpit, checking for clipping with gear, doors and control surfaces.
 - [ ] Fire all six missiles on each type and confirm the correct store disappears each time.
 - [ ] Verify by flying that a rear-aspect lock is achievable far beyond head-on lock range, and that a 500 m crossing shot is refused.
 - [ ] Verify that flares dispense visually and can seduce a tracking missile.
-- [ ] Confirm no new skipped, quarantined or failing tests.
+- [x] Confirm no new skipped, quarantined or failing tests.
 
 **Done when:** all three jets carry six correctly placed missiles, seekers behave differently by aspect, and flares work.
 
