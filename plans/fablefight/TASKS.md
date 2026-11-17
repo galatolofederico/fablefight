@@ -33,36 +33,36 @@ cargo run --release -- --fly-check f22
 
 ### Implementation
 
-- [ ] 1.1 In `README.md`, retitle the document to FableFight and add the credit line "FableFight's design and plan were drafted with DeepSeek V4.1 Flash" directly beside the existing "Created with Claude Fable 5.2 & Opus 5.5" line at line 10.
-- [ ] 1.2 In `README.md`, update the aircraft list, the missiles section and the controls summary so they describe three fighters, six stores, cannon, flares and the new gamepad layout.
-- [ ] 1.3 In `src/aircraft/mod.rs`, shrink `BUILTIN` to `[&Spec; 3]` ordered Hornet, Phantom, Raptor; keep the `c172`, `dr400`, `b747`, `concorde`, `sr71` and `starship` module declarations intact.
-- [ ] 1.4 In `src/aircraft/mod.rs`, add a comment above the retired modules recording the three shared dependencies (`src/plane.rs:615-620`, `src/render.rs:1483`, `src/hangar.rs:887-894`) so a future reader does not delete them.
-- [ ] 1.5 In `src/bind.rs`, add the actions `fire_cannon` (`Digit6`), `deploy_flares` (`Digit7`) and `padlock` (`KeyJ`) with English and French labels.
-- [ ] 1.6 In `src/bind.rs`, remove `flaps_down`/`flaps_up` from the three joystick presets while leaving both actions bindable by hand.
-- [ ] 1.7 In `src/main.rs`, rewrite the hardcoded gamepad layout: LB fires missiles, RB fires the cannon, D-pad up toggles afterburner, D-pad down deploys flares, D-pad left/right cycle targets, Y pads the camera to the target, LT/RT stay rudder, A/B throttle, X brakes, L3 gear.
-- [ ] 1.8 In `src/main.rs`, delete the Y + d-pad master-arm and cycle chords and the fire-on-Y-release behaviour.
-- [ ] 1.9 In `src/main.rs`, replace the hardcoded `boost = false` at lines 1786-1787 with persisted afterburner toggle state driven by the D-pad up action.
-- [ ] 1.10 In `src/weapons.rs`, default `Weapons::armed` to `true` on construction and reset so no keypress is required to fire; keep `Systems::powered()` as the only gate.
-- [ ] 1.11 In `src/menu.rs`, update `CONTROLS`, `PAD_FLYING` and `PAD_MENUS` to describe the new layout and drop the flap gamepad rows.
-- [ ] 1.12 In `src/main.rs`, remove the loading-tip line that teaches flaps on the gamepad and add tips for the cannon, missiles and flares.
+- [x] 1.1 In `README.md`, retitle the document to FableFight and add the credit line "FableFight's design and plan were drafted with DeepSeek V4.1 Flash" directly beside the existing "Created with Claude Fable 5.2 & Opus 5.5" line at line 10.
+- [x] 1.2 In `README.md`, update the aircraft list, the missiles section and the controls summary so they describe three fighters, six stores, cannon, flares and the new gamepad layout.
+- [x] 1.3 In `src/aircraft/mod.rs`, shrink `BUILTIN` to `[&Spec; 3]` ordered Hornet, Phantom, Raptor; keep the `c172`, `dr400`, `b747`, `concorde`, `sr71` and `starship` module declarations intact.
+- [x] 1.4 In `src/aircraft/mod.rs`, add a comment above the retired modules recording the three shared dependencies (`src/plane.rs:615-620`, `src/render.rs:1483`, `src/hangar.rs:887-894`) so a future reader does not delete them.
+- [x] 1.5 In `src/bind.rs`, add the actions `fire_cannon` (`Digit6`), `deploy_flares` (`Digit7`) and `padlock` (`KeyJ`) with English and French labels.
+- [x] 1.6 In `src/bind.rs`, remove `flaps_down`/`flaps_up` from the three joystick presets while leaving both actions bindable by hand.
+- [x] 1.7 In `src/main.rs`, rewrite the hardcoded gamepad layout: LB fires missiles, RB fires the cannon, D-pad up toggles afterburner, D-pad down deploys flares, D-pad left/right cycle targets, Y pads the camera to the target, LT/RT stay rudder, A/B throttle, X brakes, L3 gear.
+- [x] 1.8 In `src/main.rs`, delete the Y + d-pad master-arm and cycle chords and the fire-on-Y-release behaviour.
+- [x] 1.9 In `src/main.rs`, replace the hardcoded `boost = false` at lines 1786-1787 with persisted afterburner toggle state driven by the D-pad up action.
+- [x] 1.10 In `src/weapons.rs`, default `Weapons::armed` to `true` on construction and reset so no keypress is required to fire; keep `Systems::powered()` as the only gate.
+- [x] 1.11 In `src/menu.rs`, update `CONTROLS`, `PAD_FLYING` and `PAD_MENUS` to describe the new layout and drop the flap gamepad rows.
+- [x] 1.12 In `src/main.rs`, remove the loading-tip line that teaches flaps on the gamepad and add tips for the cannon, missiles and flares.
 
 ### Tests
 
-- [ ] 1.13 Add a unit test in `src/aircraft/mod.rs` asserting `BUILTIN` has exactly three entries with first keys `fa18`, `f4`, `f22`.
-- [ ] 1.14 Add a unit test in `src/aircraft/mod.rs` asserting the fighters keep `Spec::id` 2, 3 and 4, and that ids 0, 1, 5, 6, 7 and 8 are unused by `BUILTIN`.
-- [ ] 1.15 Add a unit test in `src/bind.rs` asserting `fire_cannon`, `fire_missile`, `deploy_flares` and `padlock` exist in `ACTIONS` with the documented default keys.
-- [ ] 1.16 Add a unit test in `src/weapons.rs` asserting a freshly constructed `Weapons` is `armed`, and that `try_fire` succeeds with a lock without any prior arm toggle.
-- [ ] 1.17 Add a unit test in `src/bind.rs` asserting that no joystick preset maps a button to `flaps_down` or `flaps_up`.
+- [x] 1.13 Add a unit test in `src/aircraft/mod.rs` asserting `BUILTIN` has exactly three entries with first keys `fa18`, `f4`, `f22`.
+- [x] 1.14 Add a unit test in `src/aircraft/mod.rs` asserting the fighters keep `Spec::id` 2, 3 and 4, and that ids 0, 1, 5, 6, 7 and 8 are unused by `BUILTIN`.
+- [x] 1.15 Add a unit test in `src/bind.rs` asserting `fire_cannon`, `fire_missile`, `deploy_flares` and `padlock` exist in `ACTIONS` with the documented default keys.
+- [x] 1.16 Add a unit test in `src/weapons.rs` asserting a freshly constructed `Weapons` is `armed`, and that `try_fire` succeeds with a lock without any prior arm toggle.
+- [x] 1.17 Add a unit test in `src/bind.rs` asserting that no joystick preset maps a button to `flaps_down` or `flaps_up`.
 
 ### Verification
 
-- [ ] Run `cargo check`; it exits 0.
-- [ ] Run `cargo test`; it exits 0 and all tests pass, including the five tests added above.
-- [ ] Run `cargo run --release -- --aircraft c172`; it warns about the unknown key and starts the Hornet instead of panicking.
-- [ ] Run `cargo run --release -- --aircraft fa18`; the menu lists only Hornet, Phantom and Raptor.
+- [x] Run `cargo check`; it exits 0.
+- [x] Run `cargo test`; it exits 0 and all tests pass, including the five tests added above.
+- [x] Run `cargo run --release -- --aircraft c172`; it warns about the unknown key and starts the Hornet instead of panicking.
+- [x] Run `cargo run --release -- --aircraft fa18`; the menu lists only Hornet, Phantom and Raptor.
 - [ ] Manually verify on a gamepad that LB, RB, Y and the four d-pad directions behave as specified and that no chord remains.
 - [ ] Manually verify that `F` and `V` still move the flaps and that flap aerodynamics are unchanged at low speed.
-- [ ] Confirm no new skipped, quarantined or failing tests.
+- [x] Confirm no new skipped, quarantined or failing tests.
 
 **Done when:** the menu offers three fighters, the layout matches the table in `PLAN.md`, and no arming step is required to fire.
 
