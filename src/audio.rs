@@ -139,6 +139,9 @@ pub enum Event {
     Thunder { delay: f32, near: f32, far: f32, power: f32, pan: f32 },
     /// a missile leaving its rail (strength ~0.2 .. 2)
     Missile(f32),
+    /// a cannon firing: how near the aircraft's own gun is (1: this aircraft's,
+    /// less for one heard across the sky), and its bearing (-1 left .. 1 right)
+    Gun { near: f32, pan: f32 },
 }
 
 #[derive(Default)]
@@ -198,6 +201,10 @@ const DT: f32 = 1.0 / RATE as f32;
 const TICK: u32 = 64;
 const TICK_DT: f32 = TICK as f32 * DT;
 const MAX_VOICES: usize = 32;
+/// At 6,000 rounds a minute a round leaves the barrel every 10 ms, but the ear
+/// and the mixer take a click every 40 ms, so a burst is heard as a fast
+/// series of reports rather than a hundred voices a second.
+const GUN_CLICK: f32 = 0.04;
 
 fn smooth(a: f32, b: f32, x: f32) -> f32 {
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
@@ -1423,6 +1430,8 @@ struct Synth {
     rain: Rain,
     /// the thunder heard through the cabin's walls
     thunder_lp: [f32; 2],
+    /// when the cannon's next report may be heard (s of the synth's clock)
+    gun_t: f32,
     cab: Cabin,
     dist_gain: f32,
     lim: f32,
@@ -1453,6 +1462,7 @@ impl Synth {
             world: World { lp_boom: 0.0, lp_boom2: 0.0, lp_wind: 0.0, booms: Vec::new(), crackle: 0.0, thunder: Vec::new(), echo: vec![0.0; RATE as usize * 2], echo_pos: 0, echo_lp: 0.0 },
             rain: Rain::new(),
             thunder_lp: [0.0; 2],
+            gun_t: 0.0,
             cab: Cabin::new(),
             dist_gain: 1.0,
             lim: 0.0,
@@ -1511,6 +1521,25 @@ impl Synth {
                 let s = s.clamp(0.2, 2.0);
                 let v = Voice::new(1.6, r.range(-0.25, 0.25), Bus::Mid).noise(2600.0, 700.0, 0.9, 1.3 * s, 0.32).tone(95.0, 55.0, 0.7 * s, 0.18).pulses(170.0, 40.0, false, 0.35 * s);
                 self.push(v);
+            }
+            Event::Gun { near, pan } => {
+                // One report every GUN_CLICK at the most: a burst is a rapid
+                // series of cracks, not a hundred separate voices.
+                let now = self.n as f32 * DT;
+                if now >= self.gun_t {
+                    self.gun_t = now + GUN_CLICK;
+                    let s = near.clamp(0.05, 1.5);
+                    // The aircraft's own gun is heard through its structure;
+                    // one across the sky is an outside noise.
+                    let bus = if near >= 0.9 { Bus::Struct } else { Bus::Mid };
+                    let f = r.range(1100.0, 1800.0);
+                    let v = Voice::new(0.14, pan.clamp(-1.0, 1.0), bus)
+                        .strike(1.1 * s)
+                        .res([f, f * 2.3], [6.0, 8.0], [0.5 * s, 0.25 * s])
+                        .noise(3000.0, 1200.0, 0.8, 1.4 * s, 0.035)
+                        .tone(120.0, 60.0, 0.5 * s, 0.06);
+                    self.push(v);
+                }
             }
             Event::Splash(s) => {
                 let s = s.min(2.0);
@@ -1837,7 +1866,7 @@ mod tests {
         p.warn = Warn { stall: 1.0, pull_up: true, overspeed: 1.0, gear: true, ..Default::default() };
         for cabin in [0.0, 1.0] {
             p.cabin = cabin;
-            let ev = [Event::Boom(2.0), Event::Snap(2.0), Event::Bump(3.0), Event::Touch(8.0), Event::Clunk(1.0), Event::Crunch(2.0), Event::Splash(2.0), Event::Thunder { delay: 0.0, near: 100.0, far: 4000.0, power: 2.0, pan: 1.0 }];
+            let ev = [Event::Boom(2.0), Event::Snap(2.0), Event::Bump(3.0), Event::Touch(8.0), Event::Clunk(1.0), Event::Crunch(2.0), Event::Splash(2.0), Event::Thunder { delay: 0.0, near: 100.0, far: 4000.0, power: 2.0, pan: 1.0 }, Event::Gun { near: 1.0, pan: 0.5 }];
             let x = render(p, &ev, 1.5);
             assert!(x.iter().all(|s| s[0].is_finite() && s[1].is_finite() && s[0].abs() <= 1.0 && s[1].abs() <= 1.0));
         }
@@ -1963,6 +1992,35 @@ mod tests {
             let loud = rms(&render(Params { warn: w, ..base }, &[], 1.0));
             assert!(db(loud, quiet) > 3.0, "{w:?} barely audible: {:.1} dB", db(loud, quiet));
         }
+    }
+
+    #[test]
+    fn a_burst_is_rate_limited_and_stays_in_range() {
+        let p = flying();
+        let shared = Arc::new(Shared::default());
+        *shared.params.lock() = p;
+        let mut s = Synth::new(shared.clone());
+        s.p = p;
+        for _ in 0..RATE * 2 {
+            s.next();
+        }
+        // A hundred rounds a second for a second: the mixer should make a
+        // report every 40 ms, not a hundred, and never run hot.
+        let mut reports = 0;
+        let mut x = Vec::with_capacity(RATE as usize);
+        for k in 0..RATE as usize {
+            if k % (RATE as usize / 100) == 0 {
+                let before = s.voices.len();
+                s.event(Event::Gun { near: 1.0, pan: 0.0 });
+                if s.voices.len() > before {
+                    reports += 1;
+                }
+            }
+            x.push([s.next().unwrap(), s.next().unwrap()]);
+        }
+        println!("{reports} reports for 100 rounds a second");
+        assert!((20..=30).contains(&reports), "{reports} reports for 100 rounds");
+        assert!(x.iter().all(|v| v[0].is_finite() && v[1].is_finite() && v[0].abs() <= 1.0 && v[1].abs() <= 1.0));
     }
 
     /// Thunder against the engine at cruise: the loudest second of the thunder
