@@ -1243,6 +1243,7 @@ impl Game {
         self.hangar.push(old);
         self.r.set_paint(spec.paint.as_ref());
         self.spec = spec;
+        self.plane.stores = spec.store_mass();
         self.weapons.reset(spec, &self.model.pieces);
         self.guns.reset(spec);
         self.cam_dist = spec.cam_dist;
@@ -2603,6 +2604,10 @@ impl Game {
                 }
                 self.status_until = self.real + 3.0;
             }
+            KeyCode::Digit7 if !self.crashed => {
+                self.weapons.request_flares();
+                self.status_until = self.real + 2.0;
+            }
             KeyCode::KeyG => {
                 self.goto_open = true;
                 self.goto_text.clear();
@@ -2981,8 +2986,25 @@ impl Game {
                     Refusal::NoMissiles => t!("NO MISSILES", "PLUS DE MISSILES"),
                     Refusal::NoWeapons => t!("NO WEAPONS ON THIS AIRCRAFT", "PAS D'ARMES SUR CET AVION"),
                     Refusal::NoTarget => t!("NO TARGET", "PAS DE CIBLE"),
+                    Refusal::TooClose => t!("TOO CLOSE  -  MINIMUM RANGE", "TROP PRÈS  -  PORTÉE MINIMALE"),
+                    Refusal::NoFlares => t!("NO FLARES", "PLUS DE LEURRES"),
                 };
                 self.flash.push((msg.into(), self.real));
+            }
+            weapons::Event::Flare { pos, vel } => {
+                let r = &mut self.rng;
+                femit.push((pos, render::Particle {
+                    vel: vel.as_vec3().into(),
+                    life: r.range(1.2, 2.0),
+                    size0: r.range(0.8, 1.4),
+                    size1: 0.1,
+                    kind: crash::FLASH,
+                    drag: 0.5,
+                    buoy: 0.2,
+                    seed: r.f(),
+                    alpha: 1.0,
+                    ..Default::default()
+                }));
             }
             weapons::Event::Blast { pos, power, size, target } => {
                 let near = 1.0 / (1.0 + ((self.cam_pos - pos).length() as f32 / 500.0).powi(2));
@@ -3573,7 +3595,7 @@ impl Game {
                 for ev in self.guns.step(h, cannon && powered, &mut self.plane, &mut self.bandits) {
                     self.gun_event(ev, &mut femit);
                 }
-                for ev in self.weapons.step(h, &self.plane, &weapon_targets, &self.world, powered) {
+                for ev in self.weapons.step(h, &mut self.plane, &weapon_targets, &self.world, powered) {
                     self.weapon_event(ev, &mut femit);
                 }
                 // What the pipper needs of the locked target: where it is and
@@ -6026,7 +6048,7 @@ impl Game {
                                     if st.spec.side == 0 { left += 1 } else { right += 1 }
                                 }
                             }
-                            shadow(ui, format!("AIM-9  L {left}  R {right}"), 14.0, dim);
+                            shadow(ui, format!("AAM  L {left}  R {right}   FLARES {:>2}", self.weapons.flares_left), 14.0, dim);
                             let (line, col) = if !armed {
                                 (t!("SEEKER  SAFE", "CHERCHEUR  SÉCURISÉ").to_string(), dim)
                             } else if !power {

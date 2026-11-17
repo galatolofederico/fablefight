@@ -96,6 +96,8 @@ pub struct Plane {
     pub sys: crate::systems::Systems,
     /// payload aboard (kg): crew, passengers, baggage
     pub payload: f64,
+    /// missiles still on the stations (kg): full at spawn, less as they are fired
+    pub stores: f64,
     /// a jet's fan speed, fraction of 100% N1
     pub n1: f64,
     /// how far the afterburners are lit, 0..1 (what is seen and heard of them; the thrust is immediate)
@@ -246,6 +248,7 @@ impl Plane {
             auto_start: 0.0,
             sys: Default::default(),
             payload: spec.payload[0],
+            stores: spec.store_mass(),
             n1: 0.0,
             burner: 0.0,
             drop: 0.0,
@@ -383,12 +386,13 @@ impl Plane {
         self.stick.y * s.steer_max * fade * self.gear
     }
     /// Angle of attack the wing stalls at (flaps make it stall a little earlier, slats later).
-    /// What it weighs now (kg): `spec.mass` with half tanks, more or less the fuel.
+    /// What it weighs now (kg): `spec.mass` with half tanks, more or less the
+    /// fuel, plus whatever missiles are still on the stations.
     pub fn mass(&self) -> f64 {
         if let Some(rk) = self.spec.rocket() {
             return self.rocket_mass(rk).0;
         }
-        self.spec.mass + self.fuel - 0.5 * self.spec.fuel_kg + self.payload - self.spec.payload[0]
+        self.spec.mass + self.fuel - 0.5 * self.spec.fuel_kg + self.payload - self.spec.payload[0] + self.stores
     }
 
     /// Centre of gravity, as a fraction of the mean aerodynamic chord: where
@@ -4287,5 +4291,53 @@ mod tests {
             let nose = Vec3::new(0.0, 0.0, spec.hard[0].z as f32 + 1.0);
             assert_eq!(p.blast(nose, light), Some(G_ENGINE), "{} nose", spec.name);
         }
+    }
+
+    /// A full load weighs on the aircraft; each launch takes its own missile's
+    /// mass away, and the last one leaves the clean airframe mass.
+    #[test]
+    fn each_launch_takes_its_store_mass_off_the_aircraft() {
+        use crate::weapons::{Event, TargetKey, Weapons};
+        let spec = &crate::aircraft::fa18::SPEC;
+        let mut p = Plane::spawn(spec, 0.6, -2.1, 3_000.0, 0.0, 200.0);
+        assert!((p.mass() - (spec.mass + spec.store_mass())).abs() < 1e-9, "a full load is heavier");
+        let pieces: Vec<crate::airframe::Piece> = spec
+            .missiles()
+            .iter()
+            .map(|st| crate::airframe::Piece {
+                name: st.piece,
+                group: st.group,
+                mesh: crate::airframe::Mesh::default(),
+                parent: None,
+                pivot: Vec3::ZERO,
+                axis: Vec3::X,
+                anim: crate::airframe::Anim::Fixed,
+                role: crate::airframe::Role::Other,
+                vis: crate::airframe::Vis::Always,
+                glass: false,
+                occluder: false,
+            })
+            .collect();
+        let mut w = Weapons::new(spec, &pieces);
+        w.target = Some(TargetKey::Bandit(0));
+        w.lock = 1.0;
+        let mut expect = p.mass();
+        for _ in 0..spec.missiles().len() {
+            let before = p.mass();
+            let ev = w.try_fire(&mut p, true);
+            let station = match ev.as_slice() {
+                [Event::Fired { station }] => *station,
+                other => panic!("expected a launch, got {other:?}"),
+            };
+            let dropped = spec.missiles()[station].mass as f64;
+            assert!((before - p.mass() - dropped).abs() < 1e-9, "station {station} takes {dropped} kg");
+            expect -= dropped;
+            assert!((p.mass() - expect).abs() < 1e-9);
+        }
+        assert!((p.mass() - spec.mass).abs() < 1e-9, "all stores gone: {}", p.mass());
+        assert!(matches!(
+            w.try_fire(&mut p, true).as_slice(),
+            [Event::Refused(crate::weapons::Refusal::NoMissiles)]
+        ));
     }
 }

@@ -66,7 +66,7 @@ fn a_missile_shot_down_a_bandit_and_the_kill_is_recorded() {
         if weapons.lock >= 1.0 && !fired {
             weapons.request_fire();
         }
-        for ev in weapons.step(dt, &player, &targets, &world, true) {
+        for ev in weapons.step(dt, &mut player, &targets, &world, true) {
             match ev {
                 weapons::Event::Fired { .. } => fired = true,
                 weapons::Event::Blast { pos, power, target: Some(weapons::TargetKey::Bandit(b)), .. } => {

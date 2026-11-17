@@ -1,24 +1,28 @@
-//! Heat-seeking air-to-air missiles.
+//! Air-to-air missiles and countermeasures.
 //!
-//! The player's missile system lives here: master arm, the seeker and its
-//! lock, the two wingtip Sidewinders, and the missiles themselves once they
-//! have left the rails. The flight model and the rest of the aircraft know
-//! nothing about them; `main.rs` feeds in the target list each fixed step and
-//! turns the events into sound, particles and damage. Targets are live ADS-B
-//! aircraft, airport traffic, or the AI bandits (`TargetKey::Bandit`).
+//! The player's weapon system lives here: master arm, the seeker and its
+//! lock, the six stations on the three fighters, the missiles themselves once
+//! they have left the rails, and the flare dispenser. The flight model and the
+//! rest of the aircraft know nothing about them; `main.rs` feeds in the target
+//! list each fixed step and turns the events into sound, particles and damage.
+//! Targets are live ADS-B aircraft, airport traffic, or the AI bandits
+//! (`TargetKey::Bandit`).
 //!
-//! A missile is a simple boost-and-coast body: it leaves the wingtip with the
+//! A missile is a simple boost-and-coast body: it leaves its station with the
 //! aircraft's velocity, burns for a couple of seconds, then drags down while
 //! its seeker follows the target's heat. Guidance is lead pursuit with a
 //! finite turn rate, so a hard break can defeat it; a proximity fuse ends the
-//! flight when it gets close enough.
+//! flight when it gets close enough. The seeker sees a target's tailpipe much
+//! farther off than its nose, and will not launch inside the minimum range.
+//! Flares leave the dispenser backwards; each step they may seduce a missile
+//! that is close behind the target.
 
 use crate::aircraft::{MissileStation, Spec};
-use crate::airframe::Piece;
+use crate::airframe::{Piece, G_LWING, G_RWING};
 use crate::geo;
 use crate::world::World;
 use glam::{DQuat, DVec3};
-use std::f64::consts::FRAC_PI_4;
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
 /// The seeker's cone, off the aircraft's nose (rad).
 const LOCK_CONE: f64 = FRAC_PI_4;
@@ -26,11 +30,24 @@ const LOCK_CONE: f64 = FRAC_PI_4;
 /// target leaves the cone or range.
 const LOCK_TIME: f64 = 1.1;
 const LOCK_DECAY: f64 = 2.5;
-/// Lock range: a base distance plus a little for each size class of target.
+/// Lock range: a base distance plus a little for each size class of target,
+/// then scaled by the target's aspect: head-on (0°) is half the nominal
+/// range, abeam (90°) the nominal, and dead astern (150° and beyond) two and
+/// a half times it. A rear-aspect lock therefore reaches five times as far as
+/// a head-on one. The break points are recorded in
+/// `docs/fablefight-limitations.md`.
 const LOCK_BASE: f64 = 10_000.0;
 const LOCK_SIZE: f64 = 1_500.0;
+const LOCK_NOSE: f64 = 0.5;
+const LOCK_REAR: f64 = 2.5;
+const ASPECT_NOSE: f64 = 30.0 * PI / 180.0;
+const ASPECT_TAIL: f64 = 150.0 * PI / 180.0;
 /// The closest a target can be and still be locked (m).
 const MIN_RANGE: f64 = 150.0;
+/// The closest a target can be and still be launched at (m): inside this the
+/// motor and fuse would not arm before the missile reached it, and a crossing
+/// target leaves the seeker's gimbal almost at once. A 500 m shot is refused.
+const MIN_LAUNCH: f64 = 600.0;
 /// How long a missile flies before it gives up (s).
 const MISSILE_LIFE: f64 = 32.0;
 /// The motor (s), its acceleration (m/s²), and the drag coefficient at speed
@@ -46,6 +63,20 @@ const SEEKER_GIMBAL: f64 = 65.0f64.to_radians();
 /// How close a missile must pass to the target's centre to detonate (m).
 const FUSE_MARGIN: f64 = 12.0;
 const G0: f64 = 9.80665;
+/// The dispenser: flares carried, released per press, and how long each burns
+/// (s). The F-4E's two AN/ALE-40s carry 30 flares between them; the game gives
+/// the same 30 to every fighter (see docs/fablefight-limitations.md).
+const FLARES_MAX: u32 = 30;
+const FLARE_SALVO: u32 = 2;
+const FLARE_LIFE: f64 = 4.5;
+/// How near the target (m) a flare must be, how far a missile's seeker can be
+/// fooled by one (m), the most chance per step at point-blank dead astern,
+/// and the fuse radius on a seduced flare (m).
+const FLARE_NEAR: f64 = 400.0;
+const FLARE_REACH: f64 = 2_500.0;
+const FLARE_DECOY: f64 = 0.006;
+const DECOY_FUSE: f64 = 18.0;
+const RNG_SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// What an aircraft is, as far as a missile is concerned.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -88,6 +119,10 @@ pub enum Refusal {
     NoMissiles,
     NoWeapons,
     NoTarget,
+    /// The target is closer than the missile's minimum launch range.
+    TooClose,
+    /// The flare dispenser is empty.
+    NoFlares,
 }
 
 /// Something the weapon system did, for `main.rs` to turn into a flash, a
@@ -98,10 +133,12 @@ pub enum Event {
     Locked,
     /// The target went out of the seeker's cone/range, or disappeared.
     Lost,
-    /// A missile left a wingtip.
+    /// A missile left a station.
     Fired { station: usize },
     /// A request could not be carried out.
     Refused(Refusal),
+    /// A flare left the dispenser.
+    Flare { pos: DVec3, vel: DVec3 },
     /// A missile detonated.  `target` is set when it was the target that
     /// ended the flight (a hit), not the ground or a timeout.
     Blast {
@@ -110,6 +147,17 @@ pub enum Event {
         size: f32,
         target: Option<TargetKey>,
     },
+}
+
+/// A burning flare: ejected backwards, it drags down and away from the aircraft
+/// while it burns.
+#[derive(Clone, Debug)]
+pub struct Flare {
+    pub id: u64,
+    pub pos: DVec3,
+    pub vel: DVec3,
+    pub age: f64,
+    pub life: f64,
 }
 
 /// One hardpoint: what it is, the model piece that is the loaded missile, and
@@ -122,6 +170,7 @@ pub struct Station {
 }
 
 /// A missile in flight.  Body frame is the aircraft's: the nose is -Z.
+#[derive(Clone)]
 pub struct Missile {
     pub station: usize,
     pub pos: DVec3,
@@ -131,6 +180,8 @@ pub struct Missile {
     /// How hard the motor is burning, 0 after burnout (for the smoke trail).
     pub burn: f32,
     target: Option<TargetKey>,
+    /// The flare it has been seduced by, while that flare is alight.
+    decoy: Option<u64>,
     alive: bool,
 }
 
@@ -142,12 +193,20 @@ pub struct Weapons {
     pub target: Option<TargetKey>,
     pub target_view: Option<TargetView>,
     pub missiles: Vec<Missile>,
+    /// The burning flares in the air.
+    pub flares: Vec<Flare>,
+    /// Flares left in the dispensers.
+    pub flares_left: u32,
     /// The seeker's tone: 0 silent, 0.1 searching, up to 1 locked.
     pub seeker_tone: f32,
     cycle: bool,
     fire: bool,
+    flares_requested: bool,
     /// A lock event has been sent for the current target.
     locked: bool,
+    /// The next flare's serial (never reused) and the decoy dice's state.
+    next_flare: u64,
+    rng: u64,
 }
 
 impl Weapons {
@@ -159,16 +218,22 @@ impl Weapons {
             target: None,
             target_view: None,
             missiles: Vec::new(),
+            flares: Vec::new(),
+            flares_left: 0,
             seeker_tone: 0.0,
             cycle: false,
             fire: false,
+            flares_requested: false,
             locked: false,
+            next_flare: 0,
+            rng: RNG_SEED,
         };
         w.reset(spec, pieces);
         w
     }
 
-    /// Back to a fresh aircraft: missiles loaded, weapons live, no lock.
+    /// Back to a fresh aircraft: missiles loaded, flares stowed, weapons live,
+    /// no lock.
     pub fn reset(&mut self, spec: &'static Spec, pieces: &[Piece]) {
         self.stations.clear();
         for st in spec.missiles() {
@@ -188,10 +253,15 @@ impl Weapons {
         self.target = None;
         self.target_view = None;
         self.missiles.clear();
+        self.flares.clear();
+        self.flares_left = if self.stations.is_empty() { 0 } else { FLARES_MAX };
         self.seeker_tone = 0.0;
         self.cycle = false;
         self.fire = false;
+        self.flares_requested = false;
         self.locked = false;
+        self.next_flare = 0;
+        self.rng = RNG_SEED;
     }
 
     pub fn has_weapons(&self) -> bool {
@@ -222,6 +292,10 @@ impl Weapons {
         self.fire = true;
     }
 
+    pub fn request_flares(&mut self) {
+        self.flares_requested = true;
+    }
+
     /// Is the loaded missile of this model piece gone (and so hidden)?
     pub fn hides_piece(&self, name: &str) -> bool {
         self.stations
@@ -229,12 +303,12 @@ impl Weapons {
             .any(|s| s.piece.is_some() && s.spec.piece == name && !s.loaded)
     }
 
-    /// Fly the seeker and every missile on.  `dt` is the fixed physics step;
-    /// `powered` is the aircraft's electrical bus.
+    /// Fly the seeker, the flares and every missile on.  `dt` is the fixed
+    /// physics step; `powered` is the aircraft's electrical bus.
     pub fn step(
         &mut self,
         dt: f64,
-        plane: &crate::plane::Plane,
+        plane: &mut crate::plane::Plane,
         targets: &[Target],
         world: &World,
         powered: bool,
@@ -262,7 +336,8 @@ impl Weapons {
             if let Some(key) = self.target.clone() {
                 if let Some(t) = targets.iter().find(|t| t.key == key) {
                     let (range, angle) = Self::aim(plane, t);
-                    if range >= MIN_RANGE && range <= Self::lock_range(t.size) && angle <= LOCK_CONE
+                    let aspect = Self::aspect(plane, t);
+                    if range >= MIN_RANGE && range <= Self::lock_range(t.size, aspect) && angle <= LOCK_CONE
                     {
                         self.lock = (self.lock + dt / LOCK_TIME).min(1.0);
                         self.set_view(t, plane);
@@ -294,12 +369,24 @@ impl Weapons {
             }
         }
 
+        if std::mem::take(&mut self.flares_requested) {
+            if self.stations.is_empty() {
+                events.push(Event::Refused(Refusal::NoWeapons));
+            } else if !powered {
+                events.push(Event::Refused(Refusal::NoPower));
+            } else {
+                events.extend(self.dispense(plane));
+            }
+        }
+        self.drift_flares(dt);
+
         if std::mem::take(&mut self.fire) {
             events.extend(self.try_fire(plane, powered));
         }
 
+        self.seduce(targets);
         for m in &mut self.missiles {
-            m.step(dt, targets, world, &mut events);
+            m.step(dt, targets, &self.flares, world, &mut events);
         }
         self.missiles.retain(|m| m.alive);
 
@@ -315,9 +402,75 @@ impl Weapons {
         events
     }
 
-    /// Lock range for a target's size class (m).
-    fn lock_range(size: u8) -> f64 {
-        LOCK_BASE + LOCK_SIZE * size.min(4) as f64
+    /// One press of the dispenser: a small salvo backwards and down, with one
+    /// event per flare for the visuals.
+    fn dispense(&mut self, plane: &crate::plane::Plane) -> Vec<Event> {
+        if self.flares_left == 0 {
+            return vec![Event::Refused(Refusal::NoFlares)];
+        }
+        let n = FLARE_SALVO.min(self.flares_left);
+        let mut events = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            // Left and right dispensers alternate, as the real ones would.
+            let side = if self.next_flare % 2 == 0 { -1.0 } else { 1.0 };
+            let pos = plane.model_pos() + plane.rot * DVec3::new(side * 0.35, -0.55, 1.6);
+            let vel = plane.vel + plane.rot * DVec3::new(side * 6.0, -5.0, 16.0);
+            self.flares.push(Flare { id: self.next_flare, pos, vel, age: 0.0, life: FLARE_LIFE });
+            self.next_flare += 1;
+            self.flares_left -= 1;
+            events.push(Event::Flare { pos, vel });
+        }
+        events
+    }
+
+    /// Let the burning flares fall behind and burn out.
+    fn drift_flares(&mut self, dt: f64) {
+        for f in &mut self.flares {
+            f.age += dt;
+            f.vel -= f.pos.normalize_or_zero() * G0 * dt;
+            // A flare is a bluff body: it slows quickly against the air.
+            f.vel *= (1.0 - 0.35 * dt).max(0.0);
+            f.pos += f.vel * dt;
+        }
+        self.flares.retain(|f| f.age < f.life);
+    }
+
+    /// Roll each missile's seeker against every flare: close behind the
+    /// target's tail is what fools it, and farther away is less and less
+    /// likely.
+    fn seduce(&mut self, targets: &[Target]) {
+        if self.flares.is_empty() || self.missiles.is_empty() {
+            return;
+        }
+        let flares: Vec<(u64, DVec3)> = self.flares.iter().map(|f| (f.id, f.pos)).collect();
+        let mut rng = self.rng;
+        for m in &mut self.missiles {
+            if m.decoy.is_some() {
+                continue;
+            }
+            let Some(t) = m.target.as_ref().and_then(|k| targets.iter().find(|t| &t.key == k)) else {
+                continue;
+            };
+            let range = (t.pos - m.pos).length();
+            for &(id, pos) in &flares {
+                let near = 1.0 - ((pos - t.pos).length() / FLARE_NEAR).clamp(0.0, 1.0);
+                let chance = decoy_chance(range, behind_factor(t, pos)) * near;
+                if chance > 0.0 && next_random(&mut rng) < chance {
+                    m.decoy = Some(id);
+                    m.target = None;
+                    break;
+                }
+            }
+        }
+        self.rng = rng;
+    }
+
+    /// Lock range for a target (m): its size class sets the nominal range, and
+    /// its aspect at the seeker scales it (see `aspect_factor`). `aspect` is
+    /// the angle at the target between its nose and the line back to us: 0
+    /// head-on, PI dead astern.
+    fn lock_range(size: u8, aspect: f64) -> f64 {
+        (LOCK_BASE + LOCK_SIZE * size.min(4) as f64) * aspect_factor(aspect)
     }
 
     /// Range and angle off the nose to a target.
@@ -327,6 +480,21 @@ impl Weapons {
             d.length(),
             plane.forward().angle_between(d.normalize_or_zero()),
         )
+    }
+
+    /// How the target presents itself to the seeker: the angle at the target
+    /// between its own nose (its velocity) and the line back to our aircraft.
+    /// A target with no velocity has no tailpipe to aim at, so it counts as
+    /// abeam and gets the nominal range.
+    fn aspect(plane: &crate::plane::Plane, t: &Target) -> f64 {
+        if t.vel.length_squared() < 1.0 {
+            return FRAC_PI_2;
+        }
+        let to_shooter = plane.pos - t.pos;
+        if to_shooter.length_squared() < 1.0 {
+            return FRAC_PI_2;
+        }
+        t.vel.normalize().angle_between(to_shooter.normalize())
     }
 
     fn set_view(&mut self, t: &Target, plane: &crate::plane::Plane) {
@@ -352,7 +520,8 @@ impl Weapons {
         let mut cand: Vec<(f64, f64, usize)> = Vec::new();
         for (i, t) in targets.iter().enumerate() {
             let (range, angle) = Self::aim(plane, t);
-            if range >= MIN_RANGE && range <= Self::lock_range(t.size) && angle <= LOCK_CONE {
+            let aspect = Self::aspect(plane, t);
+            if range >= MIN_RANGE && range <= Self::lock_range(t.size, aspect) && angle <= LOCK_CONE {
                 cand.push((angle, range, i));
             }
         }
@@ -381,11 +550,17 @@ impl Weapons {
         let Some(s) = self.stations.get(i) else {
             return false;
         };
-        // A wingtip that has been torn away takes its missile with it.
-        s.loaded && s.piece.is_some() && plane.dmg.wing[s.spec.side] as f64 + 0.5 >= s.point.x.abs()
+        // A wing that has been torn away takes its stores with it; a fuselage
+        // store does not care what happened to a wing.
+        let on_wing = match s.spec.group {
+            G_LWING | G_RWING => plane.dmg.wing[s.spec.side] as f64 + 0.5 >= s.point.x.abs(),
+            _ => true,
+        };
+        s.loaded && s.piece.is_some() && on_wing
     }
 
-    fn try_fire(&mut self, plane: &crate::plane::Plane, powered: bool) -> Vec<Event> {
+    /// The launch path shared by the fire key and the tests.
+    pub(crate) fn try_fire(&mut self, plane: &mut crate::plane::Plane, powered: bool) -> Vec<Event> {
         if !self.armed {
             return vec![Event::Refused(Refusal::NotArmed)];
         }
@@ -401,11 +576,15 @@ impl Weapons {
         let Some(i) = (0..self.stations.len()).find(|i| self.station_ok(plane, *i)) else {
             return vec![Event::Refused(Refusal::NoMissiles)];
         };
+        if self.target_view.as_ref().is_some_and(|v| v.range < MIN_LAUNCH) {
+            return vec![Event::Refused(Refusal::TooClose)];
+        }
         let st = &self.stations[i];
         let pos = plane.model_pos() + plane.rot * st.point;
         let vel = plane.vel + plane.forward() * 12.0;
         let rot = plane.rot;
         let target = self.target.clone();
+        let mass = st.spec.mass as f64;
         self.missiles.push(Missile {
             station: i,
             pos,
@@ -414,15 +593,59 @@ impl Weapons {
             age: 0.0,
             burn: 0.0,
             target,
+            decoy: None,
             alive: true,
         });
         self.stations[i].loaded = false;
+        // The empty launcher stays on the aircraft; only the missile's mass goes.
+        plane.stores = (plane.stores - mass).max(0.0);
         vec![Event::Fired { station: i }]
     }
 }
 
+/// How much of its nominal lock range the seeker gets at a target aspect:
+/// half head-on, the nominal abeam, two and a half times dead astern, linear
+/// between the break points at 30°, 90° and 150°.
+fn aspect_factor(aspect: f64) -> f64 {
+    let a = aspect.abs().min(PI);
+    if a <= ASPECT_NOSE {
+        LOCK_NOSE
+    } else if a <= FRAC_PI_2 {
+        LOCK_NOSE + (1.0 - LOCK_NOSE) * (a - ASPECT_NOSE) / (FRAC_PI_2 - ASPECT_NOSE)
+    } else if a <= ASPECT_TAIL {
+        1.0 + (LOCK_REAR - 1.0) * (a - FRAC_PI_2) / (ASPECT_TAIL - FRAC_PI_2)
+    } else {
+        LOCK_REAR
+    }
+}
+
+/// How much a flare lies behind the target's own tail (1 dead astern, 0 ahead
+/// of its wing): only a flare in the target's exhaust wake can fool an IR
+/// seeker into following it.
+fn behind_factor(t: &Target, flare: DVec3) -> f64 {
+    let back = -t.vel.normalize_or_zero();
+    let to_flare = (flare - t.pos).normalize_or_zero();
+    back.dot(to_flare).max(0.0)
+}
+
+/// Chance per step that a seeker tracking a target at `range` (m) transfers to
+/// a flare `behind` the target's tail. It falls with range and reaches zero at
+/// `FLARE_REACH`; `behind` is 0..1. Bounded to 0..1 for any argument.
+fn decoy_chance(range: f64, behind: f64) -> f64 {
+    let near = 1.0 - (range / FLARE_REACH).clamp(0.0, 1.0);
+    (FLARE_DECOY * near * near * behind.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+}
+
+/// A deterministic xorshift, so a replay of the same shots rolls the same dice.
+fn next_random(state: &mut u64) -> f64 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    (*state >> 11) as f64 / (1u64 << 53) as f64
+}
+
 impl Missile {
-    fn step(&mut self, dt: f64, targets: &[Target], world: &World, events: &mut Vec<Event>) {
+    fn step(&mut self, dt: f64, targets: &[Target], flares: &[Flare], world: &World, events: &mut Vec<Event>) {
         self.age += dt;
         self.burn = if self.age < BOOST_TIME {
             (1.0 - self.age / BOOST_TIME) as f32
@@ -440,24 +663,43 @@ impl Missile {
             return;
         }
 
-        let tgt = self
-            .target
-            .as_ref()
-            .and_then(|k| targets.iter().find(|t| &t.key == k));
-        self.fly(dt, tgt);
-
-        if let Some(t) = tgt {
-            let d = (t.pos - self.pos).length();
-            let radius = target_radius(t.size);
-            if d <= radius + FUSE_MARGIN {
+        if let Some(f) = self.decoy.and_then(|id| flares.iter().find(|f| f.id == id)) {
+            // Seduced: the seeker follows the flare, and the fuse fires on it.
+            self.fly_at(dt, f.pos, f.vel);
+            if (f.pos - self.pos).length() <= DECOY_FUSE {
                 events.push(Event::Blast {
                     pos: self.pos,
-                    power: blast_power(t.size),
-                    size: t.size as f32,
-                    target: Some(t.key.clone()),
+                    power: 0.35,
+                    size: 0.2,
+                    target: None,
                 });
                 self.alive = false;
                 return;
+            }
+        } else {
+            // (The flare it was following has burnt out: it flies on blind.)
+            if self.decoy.take().is_some() {
+                self.target = None;
+            }
+            let tgt = self
+                .target
+                .as_ref()
+                .and_then(|k| targets.iter().find(|t| &t.key == k));
+            self.fly(dt, tgt);
+
+            if let Some(t) = tgt {
+                let d = (t.pos - self.pos).length();
+                let radius = target_radius(t.size);
+                if d <= radius + FUSE_MARGIN {
+                    events.push(Event::Blast {
+                        pos: self.pos,
+                        power: blast_power(t.size),
+                        size: t.size as f32,
+                        target: Some(t.key.clone()),
+                    });
+                    self.alive = false;
+                    return;
+                }
             }
         }
 
@@ -487,14 +729,26 @@ impl Missile {
     /// One step of guidance and motion, without the hit and ground checks.
     fn fly(&mut self, dt: f64, tgt: Option<&Target>) {
         if let Some(t) = tgt {
-            if !self.steer(dt, t) {
-                // The target has slid out of the seeker's gimbal: the missile
-                // flies on, but it is no longer guiding. (The fuse still gets
-                // its chance this step.)
-                self.target = None;
-            }
+            self.fly_at(dt, t.pos, t.vel);
+        } else {
+            self.coast(dt);
         }
+    }
 
+    /// Turn towards a point (a target's or a flare's centre) and fly on.
+    fn fly_at(&mut self, dt: f64, pos: DVec3, vel: DVec3) {
+        if !self.steer(dt, pos, vel) {
+            // The point has slid out of the seeker's gimbal: the missile flies
+            // on, but it is no longer guiding. (The fuse still gets its chance
+            // this step.)
+            self.target = None;
+            self.decoy = None;
+        }
+        self.coast(dt);
+    }
+
+    /// The body's motion this step: motor, drag, gravity and the speed limit.
+    fn coast(&mut self, dt: f64) {
         let speed = self.vel.length();
         let mut acc = self.vel.normalize_or_zero()
             * if self.age < BOOST_TIME {
@@ -519,11 +773,12 @@ impl Missile {
         }
     }
 
-    /// Turn the flight path towards the target's lead point. The fins bend
-    /// the velocity itself, not just the model, so this works after burnout
-    /// too. Returns false when the target is outside the seeker's gimbal.
-    fn steer(&mut self, dt: f64, t: &Target) -> bool {
-        let los = t.pos - self.pos;
+    /// Turn the flight path towards the lead point of a target (or, with a
+    /// flare, its current position). The fins bend the velocity itself, not
+    /// just the model, so this works after burnout too. Returns false when the
+    /// aim point is outside the seeker's gimbal.
+    fn steer(&mut self, dt: f64, pos: DVec3, vel: DVec3) -> bool {
+        let los = pos - self.pos;
         let dist = los.length();
         let los_hat = los.normalize_or_zero();
         let speed = self.vel.length();
@@ -532,13 +787,14 @@ impl Missile {
             return false;
         }
         // Lead the target: where it will be when the missile can get there,
-        // solved a few times because the range changes too.
-        let closing = (speed + t.vel.dot(los_hat)).max(150.0);
+        // solved a few times because the range changes too. A flare hardly
+        // moves, and its own drift is all the lead it needs.
+        let closing = (speed + vel.dot(los_hat)).max(150.0);
         let mut t_go = dist / closing;
         for _ in 0..3 {
-            t_go = (t.pos + t.vel * t_go - self.pos).length() / closing;
+            t_go = (pos + vel * t_go - self.pos).length() / closing;
         }
-        let aim = t.pos + t.vel * t_go.clamp(0.0, 15.0);
+        let aim = pos + vel * t_go.clamp(0.0, 15.0);
         let desired = (aim - self.pos).normalize_or_zero();
         let cur = self.vel / speed;
         let max_rate = MAX_G * G0 / speed.max(100.0);
@@ -596,7 +852,7 @@ mod tests {
 
     #[test]
     fn a_target_in_front_locks_and_fires() {
-        let (plane, pieces) = hornet_with_missiles();
+        let (mut plane, pieces) = hornet_with_missiles();
         let mut w = Weapons::new(&crate::aircraft::fa18::SPEC, &pieces);
         w.armed = true;
         let target = Target {
@@ -608,7 +864,7 @@ mod tests {
         };
         assert!(w.cycle_target(&plane, std::slice::from_ref(&target)));
         w.lock = 1.0;
-        let events = w.try_fire(&plane, true);
+        let events = w.try_fire(&mut plane, true);
         assert!(matches!(events.as_slice(), [Event::Fired { station: 0 }]));
         assert!(!w.loaded(0));
         assert_eq!(w.missiles.len(), 1);
@@ -616,11 +872,11 @@ mod tests {
 
     #[test]
     fn safe_aircraft_refuses_to_fire() {
-        let (plane, pieces) = hornet_with_missiles();
+        let (mut plane, pieces) = hornet_with_missiles();
         let mut w = Weapons::new(&crate::aircraft::fa18::SPEC, &pieces);
         w.armed = false;
         w.lock = 1.0;
-        let events = w.try_fire(&plane, true);
+        let events = w.try_fire(&mut plane, true);
         assert!(matches!(
             events.as_slice(),
             [Event::Refused(Refusal::NotArmed)]
@@ -629,7 +885,7 @@ mod tests {
 
     #[test]
     fn a_second_shot_uses_the_other_wingtip() {
-        let (plane, pieces) = hornet_with_missiles();
+        let (mut plane, pieces) = hornet_with_missiles();
         let mut w = Weapons::new(&crate::aircraft::fa18::SPEC, &pieces);
         w.armed = true;
         let target = Target {
@@ -642,15 +898,15 @@ mod tests {
         w.target = Some(target.key.clone());
         w.lock = 1.0;
         assert!(matches!(
-            w.try_fire(&plane, true).as_slice(),
+            w.try_fire(&mut plane, true).as_slice(),
             [Event::Fired { station: 0 }]
         ));
         assert!(matches!(
-            w.try_fire(&plane, true).as_slice(),
+            w.try_fire(&mut plane, true).as_slice(),
             [Event::Fired { station: 1 }]
         ));
         assert!(matches!(
-            w.try_fire(&plane, true).as_slice(),
+            w.try_fire(&mut plane, true).as_slice(),
             [Event::Refused(Refusal::NoMissiles)]
         ));
     }
@@ -666,6 +922,7 @@ mod tests {
             age: 0.0,
             burn: 0.0,
             target: None,
+            decoy: None,
             alive: true,
         };
         let mut t = Target {
@@ -696,6 +953,7 @@ mod tests {
             age: 10.0,
             burn: 0.0,
             target: None,
+            decoy: None,
             alive: true,
         };
         let target = Target {
@@ -706,7 +964,7 @@ mod tests {
             label: "TURN".into(),
         };
         for _ in 0..180 {
-            assert!(m.steer(1.0 / 180.0, &target));
+            assert!(m.steer(1.0 / 180.0, target.pos, target.vel));
         }
         // It started flying +X; a second of 32 g at 300 m/s should have bent
         // the flight path well towards -Z.
@@ -715,8 +973,146 @@ mod tests {
 
     #[test]
     fn lock_range_grows_with_the_target() {
-        assert!(Weapons::lock_range(4) > Weapons::lock_range(0));
-        assert!((Weapons::lock_range(0) - LOCK_BASE).abs() < 1e-9);
+        assert!(Weapons::lock_range(4, FRAC_PI_2) > Weapons::lock_range(0, FRAC_PI_2));
+        assert!((Weapons::lock_range(0, FRAC_PI_2) - LOCK_BASE).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rear_aspect_locks_five_times_as_far_as_head_on() {
+        // The documented ratio: half the nominal range from the nose, two and
+        // a half times it from the tail.
+        for size in 0..=4 {
+            let nose = Weapons::lock_range(size, 0.0);
+            let rear = Weapons::lock_range(size, PI);
+            assert!((rear / nose - LOCK_REAR / LOCK_NOSE).abs() < 1e-9, "size {size}: {rear} / {nose}");
+            assert!(rear > 4.0 * nose, "rear {rear} is not four times head-on {nose}");
+            // And the break points: half at 30 degrees or less, nominal abeam.
+            assert!((Weapons::lock_range(size, ASPECT_NOSE) - LOCK_NOSE * (LOCK_BASE + LOCK_SIZE * size as f64)).abs() < 1e-9);
+            assert!((Weapons::lock_range(size, FRAC_PI_2) - (LOCK_BASE + LOCK_SIZE * size as f64)).abs() < 1e-9);
+            assert!((Weapons::lock_range(size, ASPECT_TAIL) - LOCK_REAR * (LOCK_BASE + LOCK_SIZE * size as f64)).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_launch_inside_the_minimum_range_is_refused() {
+        let (mut plane, pieces) = hornet_with_missiles();
+        let mut w = Weapons::new(&crate::aircraft::fa18::SPEC, &pieces);
+        let target = Target {
+            key: TargetKey::Live("CLOSE".into()),
+            pos: plane.pos + plane.forward() * (MIN_LAUNCH - 100.0),
+            vel: plane.vel,
+            size: 2,
+            label: "CLOSE".into(),
+        };
+        assert!(w.cycle_target(&plane, std::slice::from_ref(&target)));
+        w.lock = 1.0;
+        assert!(matches!(
+            w.try_fire(&mut plane, true).as_slice(),
+            [Event::Refused(Refusal::TooClose)]
+        ));
+        assert!(w.loaded(0), "a refused launch keeps its missile");
+        assert!(w.missiles.is_empty());
+        // A 500 m crossing shot is inside the documented 600 m minimum.
+        assert!(500.0 < MIN_LAUNCH);
+    }
+
+    #[test]
+    fn flares_never_exceed_the_carry_and_run_out_cleanly() {
+        let (plane, pieces) = hornet_with_missiles();
+        let mut w = Weapons::new(&crate::aircraft::fa18::SPEC, &pieces);
+        assert_eq!(w.flares_left, FLARES_MAX);
+        let mut dispensed = 0;
+        for _ in 0..(FLARES_MAX + 10) {
+            let before = w.flares.len();
+            let ev = w.dispense(&plane);
+            let added = w.flares.len() - before;
+            dispensed += added;
+            assert_eq!(w.flares.len() as u32 + w.flares_left, FLARES_MAX, "carry plus fired always 30");
+            if added > 0 {
+                assert!(ev.iter().all(|e| matches!(e, Event::Flare { .. })));
+            } else {
+                assert!(matches!(ev.as_slice(), [Event::Refused(Refusal::NoFlares)]));
+            }
+        }
+        assert_eq!(dispensed, FLARES_MAX as usize);
+        assert_eq!(w.flares_left, 0);
+        // With the dispenser empty, pressing again changes nothing.
+        let before = w.flares.len();
+        assert!(matches!(w.dispense(&plane).as_slice(), [Event::Refused(Refusal::NoFlares)]));
+        assert_eq!(w.flares.len(), before);
+    }
+
+    #[test]
+    fn decoy_chance_is_bounded_and_falls_with_range() {
+        let mut last = decoy_chance(0.0, 1.0);
+        assert!(last > 0.0 && last <= 1.0);
+        for k in 0..=300 {
+            let range = k as f64 * 10.0;
+            let chance = decoy_chance(range, 1.0);
+            assert!((0.0..=1.0).contains(&chance), "range {range}: {chance}");
+            assert!(chance <= last + 1e-12, "rises with range at {range}");
+            last = chance;
+        }
+        assert_eq!(decoy_chance(FLARE_REACH, 1.0), 0.0);
+        assert_eq!(decoy_chance(FLARE_REACH + 10_000.0, 1.0), 0.0);
+        // The whole aspect envelope, and every range, stays in 0..1.
+        for a in 0..=180 {
+            let behind = (a as f64).to_radians().cos().max(0.0);
+            for range in [0.0, 100.0, 800.0, 1_600.0, 2_400.0, 4_000.0] {
+                let chance = decoy_chance(range, behind);
+                assert!((0.0..=1.0).contains(&chance), "aspect {a}, range {range}: {chance}");
+                assert!(chance <= decoy_chance(range, 1.0) + 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn a_flare_behind_the_target_can_seduce_a_seeker() {
+        let (plane, _) = hornet_with_missiles();
+        let mut w = Weapons::new(&crate::aircraft::fa18::SPEC, &[]);
+        let target = Target {
+            key: TargetKey::Bandit(1),
+            pos: plane.pos + plane.forward() * 2_000.0,
+            vel: plane.forward() * 200.0,
+            size: 1,
+            label: "BANDIT".into(),
+        };
+        let missile = Missile {
+            station: 0,
+            pos: target.pos - target.vel.normalize() * 1_000.0,
+            vel: target.vel,
+            rot: DQuat::IDENTITY,
+            age: 2.0,
+            burn: 0.0,
+            target: Some(target.key.clone()),
+            decoy: None,
+            alive: true,
+        };
+        let flare = |behind: bool| Flare {
+            id: 7,
+            pos: if behind { target.pos - target.vel.normalize() * 50.0 } else { target.pos + target.vel.normalize() * 50.0 },
+            vel: target.vel * 0.8,
+            age: 0.0,
+            life: FLARE_LIFE,
+        };
+        // Ahead of the target's nose there is no exhaust wake to follow.
+        w.missiles.push(missile.clone());
+        w.flares.push(flare(false));
+        for _ in 0..2_000 {
+            w.seduce(std::slice::from_ref(&target));
+        }
+        assert!(w.missiles[0].decoy.is_none(), "a flare ahead must not seduce");
+        // Dead astern, close to the tail: over a few seconds the dice fall its way.
+        w.missiles[0].target = Some(target.key.clone());
+        w.flares[0] = flare(true);
+        for _ in 0..5_000 {
+            w.seduce(std::slice::from_ref(&target));
+            if w.missiles[0].decoy.is_some() {
+                break;
+            }
+        }
+        assert_eq!(w.missiles[0].decoy, Some(7));
+        assert!(w.missiles[0].target.is_none(), "a seduced missile drops its aircraft target");
     }
 
     #[test]
@@ -726,16 +1122,16 @@ mod tests {
     }
 
     #[test]
-    fn the_hornet_has_two_stations() {
+    fn the_hornet_has_six_stations() {
         let w = Weapons::new(&crate::aircraft::fa18::SPEC, &[]);
-        assert_eq!(w.stations.len(), 2);
+        assert_eq!(w.stations.len(), 6);
         assert!(w.has_weapons());
         assert!(w.stations.iter().all(|s| s.loaded));
     }
 
     #[test]
     fn a_fresh_aircraft_needs_no_arming_step() {
-        let (plane, pieces) = hornet_with_missiles();
+        let (mut plane, pieces) = hornet_with_missiles();
         let mut w = Weapons::new(&crate::aircraft::fa18::SPEC, &pieces);
         assert!(w.armed, "weapons should be live on construction");
         let target = Target {
@@ -748,7 +1144,7 @@ mod tests {
         assert!(w.cycle_target(&plane, std::slice::from_ref(&target)));
         w.lock = 1.0;
         assert!(matches!(
-            w.try_fire(&plane, true).as_slice(),
+            w.try_fire(&mut plane, true).as_slice(),
             [Event::Fired { station: 0 }]
         ));
         // A reset gives the next flight the same live weapons.
@@ -759,7 +1155,7 @@ mod tests {
 
     #[test]
     fn a_bandit_can_be_locked_without_disturbing_the_other_targets() {
-        let (plane, pieces) = hornet_with_missiles();
+        let (mut plane, pieces) = hornet_with_missiles();
         let mut w = Weapons::new(&crate::aircraft::fa18::SPEC, &pieces);
         let targets = [
             Target {
@@ -781,7 +1177,7 @@ mod tests {
         assert!(w.cycle_target(&plane, &targets));
         assert_eq!(w.target, Some(TargetKey::Bandit(4)));
         w.lock = 1.0;
-        assert!(matches!(w.try_fire(&plane, true).as_slice(), [Event::Fired { station: 0 }]));
+        assert!(matches!(w.try_fire(&mut plane, true).as_slice(), [Event::Fired { station: 0 }]));
         // The live target is still there and lockable.
         assert!(w.cycle_target(&plane, &targets));
         assert_eq!(w.target, Some(TargetKey::Live("LIVE01".into())));
