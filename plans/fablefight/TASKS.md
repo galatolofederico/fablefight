@@ -245,32 +245,32 @@ cargo run --release -- --fly-check f22
 
 ### Implementation
 
-- [ ] 6.1 In the three paint scripts, paint an aggressor scheme for enemy aircraft and regenerate the paint atlases; identify it in the limitations document as the fictional enemy livery.
-- [ ] 6.2 In `src/shaders/plane.wgsl`, add the livery branch that selects the aggressor paint for a bandit while the player keeps the existing scheme.
-- [ ] 6.3 In `src/main.rs`, pass an enemy flag into the per-instance tint so the shader can distinguish player from bandit.
-- [ ] 6.4 In `src/audio.rs`, add bandit engine voices with distance gain and stereo pan, capped at the four nearest, plus flare, launch-warning and RWR tones.
-- [ ] 6.5 In `src/shaders/pit18.wgsl`, drive the radar page from real bandit positions by bearing and range, and drive the RWR from real threats instead of the hardcoded three.
-- [ ] 6.6 In `src/main.rs`, feed the radar and RWR uniforms from the arena and weapons state each frame.
-- [ ] 6.7 Update `docs/fablefight-limitations.md` with the audio model, the radar and RWR simplifications, the aggressor livery, and everything not verified against references.
-- [ ] 6.8 Walk every acceptance criterion in `PLAN.md` and record the result of each, noting any that could not be checked and why.
+- [x] 6.1 In the three paint scripts, paint an aggressor scheme for enemy aircraft and regenerate the paint atlases; identify it in the limitations document as the fictional enemy livery.
+- [x] 6.2 In `src/shaders/plane.wgsl`, add the livery branch that selects the aggressor paint for a bandit while the player keeps the existing scheme.
+- [x] 6.3 In `src/main.rs`, pass an enemy flag into the per-instance tint so the shader can distinguish player from bandit.
+- [x] 6.4 In `src/audio.rs`, add bandit engine voices with distance gain and stereo pan, capped at the four nearest, plus flare, launch-warning and RWR tones.
+- [x] 6.5 In `src/shaders/pit18.wgsl`, drive the radar page from real bandit positions by bearing and range, and drive the RWR from real threats instead of the hardcoded three.
+- [x] 6.6 In `src/main.rs`, feed the radar and RWR uniforms from the arena and weapons state each frame.
+- [x] 6.7 Update `docs/fablefight-limitations.md` with the audio model, the radar and RWR simplifications, the aggressor livery, and everything not verified against references.
+- [x] 6.8 Walk every acceptance criterion in `PLAN.md` and record the result of each, noting any that could not be checked and why.
 
 ### Tests
 
-- [ ] 6.9 Add a test in `src/audio.rs` asserting the bandit voice count never exceeds four regardless of how many bandits exist.
-- [ ] 6.10 Add a unit test in `src/main.rs` asserting radar contact bearing and range match the world-space values for a known geometry.
-- [ ] 6.11 Add a unit test in `src/main.rs` asserting the RWR lists exactly the bandits currently painting the player.
-- [ ] 6.12 Add a shader test case in `tests/shaders.rs` covering the new aggressor livery branch and the rewritten radar page.
+- [x] 6.9 Add a test in `src/audio.rs` asserting the bandit voice count never exceeds four regardless of how many bandits exist.
+- [x] 6.10 Add a unit test in `src/main.rs` asserting radar contact bearing and range match the world-space values for a known geometry.
+- [x] 6.11 Add a unit test in `src/main.rs` asserting the RWR lists exactly the bandits currently painting the player.
+- [x] 6.12 Add a shader test case in `tests/shaders.rs` covering the new aggressor livery branch and the rewritten radar page.
 
 ### Verification
 
-- [ ] Run `cargo check`; it exits 0.
-- [ ] Run `cargo test`; it exits 0 and all tests pass, including the four added above.
-- [ ] Run `cargo test --test shaders`; it exits 0.
-- [ ] Run `cargo test --test mcp`; it exits 0.
-- [ ] Run `cargo run --release -- --fly-check fa18`, `--fly-check f4` and `--fly-check f22`; record the figures and compare against pre-change values, reporting any difference beyond noise.
+- [x] Run `cargo check`; it exits 0.
+- [x] Run `cargo test`; it exits 0 and all tests pass, including the four added above.
+- [x] Run `cargo test --test shaders`; it exits 0.
+- [x] Run `cargo test --test mcp`; it exits 0.
+- [x] Run `cargo run --release -- --fly-check fa18`, `--fly-check f4` and `--fly-check f22`; record the figures and compare against pre-change values, reporting any difference beyond noise.
 - [ ] Visually inspect all three aircraft from several exterior angles and from the cockpit: stores, livery, clipping, instrument readability.
 - [ ] Fly a full arena session on each of the three jets and confirm bandit audibility, radar and RWR behaviour, and kill-feed accuracy.
-- [ ] Report every acceptance criterion as pass, fail or unverified, with the reason.
-- [ ] Confirm no new skipped, quarantined or failing tests.
+- [x] Report every acceptance criterion as pass, fail or unverified, with the reason.
+- [x] Confirm no new skipped, quarantined or failing tests.
 
 **Done when:** every acceptance criterion in `PLAN.md` is checked and the full verification suite passes.

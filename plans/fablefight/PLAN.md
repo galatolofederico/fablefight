@@ -305,23 +305,23 @@ cargo run --release -- --fly-check f22
 
 ## Acceptance criteria
 
-- [ ] `BUILTIN` contains exactly the F/A-18C, F-4E and F-22A; the Cessna, DR 400, 747, Concorde, SR-71A and Starship do not appear in the menu or the hangar gallery.
-- [ ] `cargo check`, `cargo test`, `cargo test --test shaders` and `cargo test --test mcp` all pass.
-- [ ] `--fly-check fa18`, `--fly-check f4` and `--fly-check f22` produce the documented handling figures with no regression against pre-change values beyond noise.
+- [x] `BUILTIN` contains exactly the F/A-18C, F-4E and F-22A; the Cessna, DR 400, 747, Concorde, SR-71A and Starship do not appear in the menu or the hangar gallery.
+- [x] `cargo check`, `cargo test`, `cargo test --test shaders` and `cargo test --test mcp` all pass.
+- [x] `--fly-check fa18`, `--fly-check f4` and `--fly-check f22` produce the documented handling figures with no regression against pre-change values beyond noise.
 - [ ] On a gamepad, LT/RT control rudder, LB fires missiles, RB fires the cannon, D-pad up toggles afterburner, D-pad down dispenses flares, D-pad left/right cycle targets, Y pads the camera to the target.
 - [ ] Flaps are not bound to any joystick or gamepad button; keyboard `F`/`V` still move them, and flap aerodynamics are unchanged.
-- [ ] No arming keypress is required to fire; weapons are live whenever the aircraft has electrical power and stores.
-- [ ] Each fighter carries six missiles with visible, correctly placed store geometry on it at spawn; each launch removes the correct store.
-- [ ] A missile fired from the rear locks at long range; the same missile fired head-on locks only at short range; inside roughly 600 m a crossing-target shot misses.
-- [ ] Flares dispense rearward, are limited to 30 per aircraft, and can seduce a tracking missile.
+- [x] No arming keypress is required to fire; weapons are live whenever the aircraft has electrical power and stores.
+- [x] Each fighter carries six missiles with visible, correctly placed store geometry on it at spawn; each launch removes the correct store.
+- [x] A missile fired from the rear locks at long range; the same missile fired head-on locks only at short range; inside roughly 600 m a crossing-target shot misses.
+- [x] Flares dispense rearward, are limited to 30 per aircraft, and can seduce a tracking missile.
 - [ ] A bandit flies the full flight model: it stalls if mishandled, overshoots if it turns too hard, and can be out-energised.
-- [ ] A bandit that loses sight of the player searches instead of tracking it perfectly.
+- [x] A bandit that loses sight of the player searches instead of tracking it perfectly.
 - [ ] Cannon rounds are real projectiles with visible tracers; hits remove structure from the bandit and can tear off parts.
 - [ ] A missile blast near the player causes real structural damage, and a fatal blast produces the existing crash behaviour.
-- [ ] Mid-air collision with a bandit destroys both aircraft and reports `MID-AIR`.
-- [ ] Waves escalate to two simultaneous bandits; the player respawns after 8 s with a full magazine; kills and deaths are tallied.
-- [ ] Nothing in the arena can target live ADS-B traffic or airport traffic.
-- [ ] `docs/fablefight-limitations.md` lists every deliberate approximation with its value and rationale.
+- [x] Mid-air collision with a bandit destroys both aircraft and reports `MID-AIR`.
+- [x] Waves escalate to two simultaneous bandits; the player respawns after 8 s with a full magazine; kills and deaths are tallied.
+- [x] Nothing in the arena can target live ADS-B traffic or airport traffic.
+- [x] `docs/fablefight-limitations.md` lists every deliberate approximation with its value and rationale.
 
 ## Assumptions and open questions
 
