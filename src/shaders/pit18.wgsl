@@ -104,14 +104,17 @@ fn ddi_radar(p: vec2f, aa: f32) -> f32 {
   a = max(a, aa_line(q.x - sx, 0.003, aa) * step(abs(q.y), h.y) * 0.25);
   // The elevation caret on the left.
   a = max(a, seg_line(q, vec2f(-h.x - 0.06, 0.06), vec2f(-h.x - 0.02, 0.04), 0.004, aa));
-  // A few contacts: bricks drifting slowly down the scope, brighter for a while after the sweep passes.
+  // The contacts the arena's bandits make (RD, main.rs `radar_uniform`): a
+  // brick placed by its bearing from the nose and its range on the scope.
+  let n = u32(RD.info.x + 0.5);
   for (var i = 0; i < 4; i++) {
-    let s = f32(i) * 7.31 + 1.7;
-    let bx = (hash1(s) - 0.5) * 1.1;
-    let by = fract(hash1(s + 3.3) - G.time.x * 0.004 * (0.5 + hash1(s + 1.1))) * 1.2 - 0.6;
-    let age = fract((G.time.x * 1.1 / 6.2831853) - (bx / 1.2 + 0.25) * 0.5);
-    let lit = 0.35 + 0.65 * (1.0 - age);
-    a = max(a, aa_fill(sd_box(q, vec2f(bx, by), vec2f(0.022, 0.012)), aa) * lit);
+    if (u32(i) >= n) { break; }
+    let d = RD.contacts[i];
+    let az = clamp(d.x / max(RD.info.z, 0.01), -1.0, 1.0);
+    let rr = clamp(d.y / max(RD.info.y, 1.0), 0.0, 1.0);
+    let bx = az * (h.x - 0.10);
+    let by = -h.y + 0.10 + rr * (2.0 * h.y - 0.20);
+    a = max(a, aa_fill(sd_box(q, vec2f(bx, by), vec2f(0.022, 0.012)), aa) * select(0.65, 1.0, d.z > 0.5));
   }
   a = max(a, str_at(p, vec2f(-0.80, 0.75), S_40, 0.07, aa, -1.0));
   a = max(a, ddi_labels(p, aa, array<u32, 5>(S_RWS, 0u, 0u, S_STT, S_RSET), array<u32, 5>(0u, S_SIL, S_MENU, 0u, S_TWS),
@@ -170,19 +173,23 @@ fn ampcd(p: vec2f, aa: f32) -> vec3f {
   return col * step(abs(p.x), 1.0) * step(abs(p.y), 1.0);
 }
 
-// The RWR scope: range rings, the aircraft in the middle, the threats round it.
+// The RWR scope: range rings, the aircraft in the middle, and the bandits
+// whose radar is painting the player (RD.contacts, `radar_uniform`), placed by
+// their bearing from the nose. Only painting threats are shown.
 fn rwr(p: vec2f, aa: f32) -> f32 {
   let r = length(p);
   var a = max(aa_line(r - 0.33, 0.006, aa), aa_line(r - 0.66, 0.006, aa));
   a = max(a, aa_line(r - 0.96, 0.008, aa));
   a = max(a, max(aa_line(p.x, 0.005, aa), aa_line(p.y, 0.005, aa)) * step(r, 0.12));
-  let hdg = rad(O.params[0].w);
-  let threats = array<vec3f, 3>(vec3f(rad(35.0), 0.55, 2.0), vec3f(rad(210.0), 0.78, 6.0), vec3f(rad(300.0), 0.42, 4.0));
-  for (var i = 0; i < 3; i++) {
-    let t = threats[i];
-    let pc = vec2f(sin(t.x - hdg), cos(t.x - hdg)) * t.y;
-    a = max(a, num_at(p, pc, t.z, 0u, 1u, 0.16, aa, 0.0));
-    if (i == 0) { a = max(a, aa_line(sd_box(rot2(p - pc, 0.785), vec2f(0.0), vec2f(0.1)), 0.008, aa)); }
+  let n = u32(RD.info.x + 0.5);
+  for (var i = 0; i < 4; i++) {
+    if (u32(i) >= n) { break; }
+    let t = RD.contacts[i];
+    if (t.z < 0.5) { continue; }
+    let rr = clamp(t.y / max(RD.info.w, 1.0), 0.06, 1.0) * 0.9;
+    let pc = vec2f(sin(t.x), cos(t.x)) * rr;
+    a = max(a, aa_line(sd_box(rot2(p - pc, 0.785), vec2f(0.0), vec2f(0.055)), 0.008, aa));
+    a = max(a, seg_line(p, pc * 0.55, pc, 0.004, aa) * 0.5);
   }
   return a;
 }

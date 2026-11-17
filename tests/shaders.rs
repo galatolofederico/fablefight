@@ -15,6 +15,42 @@ fn check(name: &str, src: &str) -> bool {
     }
 }
 
+/// A minimal string table and the S_ names the deck and cockpit pages use, so
+/// plane.wgsl can be validated without the binary's generated table.
+fn string_stubs() -> String {
+    let mut out = String::from("const STRS = array<vec4u, 2>(vec4u(0u, 0u, 0u, 0u), vec4u(0u, 0u, 0u, 0u));\n");
+    let mut names = std::collections::BTreeSet::new();
+    for src in [include_str!("../src/shaders/deck747.wgsl"), include_str!("../src/shaders/pit18.wgsl")] {
+        for tok in src.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+            if tok.len() > 2 && tok.starts_with("S_") {
+                names.insert(tok);
+            }
+        }
+    }
+    for n in names {
+        out += &format!("const {n}: u32 = 1u;\n");
+    }
+    out
+}
+
+#[test]
+fn aggressor_livery_and_radar_pages_validate() {
+    let common = include_str!("../src/shaders/common.wgsl");
+    let plane = include_str!("../src/shaders/plane.wgsl");
+    let pit = include_str!("../src/shaders/pit18.wgsl");
+    // The branches this phase adds: the enemy atlas offset in the paint, and
+    // the radar page and RWR driven by the real contacts instead of hashes.
+    assert!(plane.contains("fn enemy()") && plane.contains("fn enemy_layer()"));
+    assert!(plane.contains("let el = enemy_layer();"));
+    assert!(pit.contains("RD.contacts[i]"));
+    assert!(!pit.contains("let threats = array<vec3f, 3>"));
+    let src = format!("{common}\n{plane}\n{}\n{}\n{pit}", string_stubs(), include_str!("../src/shaders/deck747.wgsl"));
+    let m = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+    if let Err(e) = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all()).validate(&m) {
+        panic!("{}", e.emit_to_string(&src));
+    }
+}
+
 #[test]
 fn shaders_validate() {
     let common = include_str!("../src/shaders/common.wgsl");

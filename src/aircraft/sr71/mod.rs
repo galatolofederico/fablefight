@@ -297,7 +297,7 @@ pub static SPEC: Spec = Spec {
     origin: None,
     ext: None,
     still: include_bytes!("../../../assets/aircraft/sr71.png"),
-    paint: Some(Paint { jpg: include_bytes!("../../../assets/sr71_paint.jpg"), views: 4, span: 24.0, length: 36.0, centre: [1.63 + CG, 1.0], relief: 12.0, sheen: 0.3 }),
+    paint: Some(Paint { jpg: include_bytes!("../../../assets/sr71_paint.jpg"), views: 4, aggressor: false, span: 24.0, length: 36.0, centre: [1.63 + CG, 1.0], relief: 12.0, sheen: 0.3 }),
     build,
     groups: [("fuselage", 12_000.0), ("tail", 600.0), ("left wing", 7_500.0), ("right wing", 7_500.0), ("nose section", 1_800.0), ("radome", 400.0), ("gear", 1_800.0)],
     span: W_X1,

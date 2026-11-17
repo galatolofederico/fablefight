@@ -181,16 +181,91 @@ refused.
 - **Firing order** is the first loaded station in the table, not the real
   aircraft's weapon-select logic or clearance-driven sequence.
 
+## The enemy livery
+
+Bandits wear a **fictional aggressor scheme**, not a real unit's or a real
+exercise's: the player's paint turned to a dark blue-grey, with red wingtips
+and a red band behind the radome. The three paint scripts
+(`assets/blender/{fa18,f4,f22}_paint.py`) derive it from the player's pictures
+and bake both sets into the same atlas, the player's views first and the
+aggressor's after them; `plane.wgsl` picks the second set for a bandit
+(`tint.w < 0`). The red bands are placed by model station, not traced from a
+photograph. Nothing about the scheme is claimed to be historical.
+
+## Audio model
+
+- The player's aircraft keeps its recorded fighter loops. A bandit's engines
+  are a cheap synthesised turbofan voice, because four more copies of the
+  recorded loops would be too expensive; they are audible at distance and
+  panned by bearing, and only the **four nearest** are played (a fixed voice
+  budget). They do not reproduce the type's real engine sound.
+- The level falls with distance as `500 / (d + 180)` (capped at 1.4), which is
+  a game curve, not an inverse-square measurement.
+- The flare dispenser has a thump and hiss. The RWR has a warble while any
+  bandit's radar is painting the player, and a separate launch-warning warble
+  is wired but **never sounds in play**: no AI aircraft carries or launches a
+  missile yet.
+- Nothing in the audio was compared against measurements or recordings of a
+  real F/A-18, F-4 or F-22; the aircraft sounds remain game sounds.
+
+## Radar and RWR
+
+- The Hornet's radar page (the right DDI) and the RWR are drawn from the real
+  bandit positions: bearing relative to the player's nose and slant range.
+  The scope is fixed at **40 nm and ±60°**, the RWR's rings at **20 km**, and
+  at most **four** contacts are drawn, the nearest. There is no scan latency,
+  no fading track history, no altitude or closure readout on the page, and no
+  terrain masking or jamming.
+- The RWR shows only the bandits whose AI radar currently holds the player:
+  the same forward cone and 12 km range that the AI itself uses to see the
+  player (the fairness sensor in `src/ai.rs`). It is not an emission-mode or
+  threat-library model, and it does not show search radars that have not
+  detected the player.
+- The radar page and RWR are still decorative in the sense that they do not
+  change what the player can lock: the missile seeker has its own aspect and
+  range rules, documented above.
+
+## Acceptance walkthrough
+
+Every criterion in `plans/fablefight/PLAN.md` was walked in phase 6. The
+result of each is recorded here; the boxes in `PLAN.md` are ticked only for
+the criteria that were actually verified.
+
+| Criterion | Result |
+|---|---|
+| `BUILTIN` is exactly the Hornet, Phantom and Raptor; the civil types are absent from the menu and hangar gallery | **Pass**: `aircraft::tests::builtin_lists_exactly_the_three_fighters`; the menu and hangar gallery list `aircraft::list()`, which is `BUILTIN` plus downloaded types only. |
+| `cargo check`, `cargo test`, the shader tests and the MCP tests pass | **Pass**: all four were run in this phase; see the verification status below. |
+| The three fly-checks have no regression beyond noise | **Pass**: the pre- and post-change figures are identical to the printed precision; see below. |
+| The gamepad layout (rudder, missiles, cannon, afterburner, flares, target cycle, padlock) | **Unverified**: needs a real gamepad and a display. The bindings and the hardcoded layout are compile-checked, but no pad was available. |
+| Flaps off every joystick/gamepad button while `F`/`V` still work, with unchanged flap aerodynamics | **Partly verified**: `bind::tests::joystick_presets_leave_flaps_to_the_keyboard` asserts no preset maps flaps and that `F`/`V` remain the keys. The aerodynamic side was **not measured**; no flight-model code was changed, but that is not a measurement. |
+| No arming keypress is required to fire | **Pass**: `weapons::tests::a_fresh_aircraft_needs_no_arming_step` (and the default is `armed = true`). |
+| Six visible, correctly placed stores; each launch removes the right one | **Pass for geometry and logic**: the station tables and model piece names are unit-tested for all three types, launch hides the fired station's piece, and offscreen Blender previews from front, side, top, under and rear show six stores on each airframe. Not checked in the running simulator. |
+| Rear-aspect lock is long, head-on short, and a crossing shot inside ~600 m is refused | **Pass**: `weapons::tests::rear_aspect_locks_five_times_as_far_as_head_on` and `weapons::tests::a_launch_inside_the_minimum_range_is_refused` cover the documented 5:1 ratio and the 600 m refusal. |
+| Flares dispense rearward, are limited to 30, and can seduce a tracking missile | **Pass**: `flares_never_exceed_the_carry_and_run_out_cleanly`, `decoy_chance_is_bounded_and_falls_with_range` and `a_flare_behind_the_target_can_seduce_a_seeker`. The visual ejection and a live dogfight were not flown. |
+| A bandit flies the full flight model, stalls if mishandled, overshoots and can be out-energised | **Unverified**: the AI's angle-of-attack and energy limits are unit-tested, but the stall/overshoot/out-energy behaviour needs a flown engagement. |
+| A bandit that loses sight searches instead of tracking perfectly | **Pass**: `ai::tests::a_player_outside_the_radar_cone_is_not_seen`. |
+| Cannon rounds are real projectiles with visible tracers; hits remove structure and can tear parts off | **Unverified**: the projectile, swept-hit, ammunition and structural-damage tests pass, but the tracer visuals were not checked in the simulator. |
+| A missile blast near the player does real structural damage; a fatal blast crashes the aircraft | **Fail / unverified**: no missile is ever aimed at the player (AI aircraft carry no missiles), and `main.rs` handles a nearby `weapons::Event::Blast` by shaking the airframe only; it does not call `Plane::blast` on the player. The fatal-blast crash path was therefore not exercised. |
+| A mid-air collision destroys both aircraft and reports `MID-AIR` | **Pass**: `arena::tests::kills_and_deaths_accumulate_independently_and_a_collision_counts_both` and the arena integration test. |
+| Waves reach two simultaneous bandits; respawn is 8 s with full stores; kills and deaths are tallied | **Pass**: `arena::tests::waves_never_put_more_than_two_bandits_in_the_air`, `a_death_arms_exactly_eight_seconds_and_the_respawn_rearms_the_aircraft` and `tests/arena_loop.rs`. |
+| Nothing in the arena can target live ADS-B or airport traffic | **Pass**: `weapons::tests::dogfight_mode_leaves_live_and_airport_traffic_unshootable`. |
+| `docs/fablefight-limitations.md` lists every deliberate approximation | **Pass**: this document, updated in this phase. |
+
 ## Verification status
 
-Checked in this phase: `cargo check`, `cargo test` and `cargo test --test
-shaders`; the new unit tests for six stations, aspect lock range, minimum
-range, flare capacity, decoy-probability bounds, seduction and store mass;
-and offscreen Blender previews from front, side, top, under and rear angles
-for all three types.
+Checked in phase 6: `cargo check`, `cargo test`, `cargo test --test shaders`,
+`cargo test --test mcp`, and the three release `--fly-check` runs before and
+after the change. The fly-check figures are unchanged (Hornet 587 kt and 113
+kt stall; Phantom 595 kt and 141 kt; Raptor 658 kt and 103 kt, with the same
+take-off and wing notes). New unit tests cover the four-voice bandit cap, the
+radar bearing/range, the RWR threat list, and the aggressor/radar shader
+compiles. Offscreen Blender previews were rendered from front, three-quarter,
+side, top, under and rear for all three types, and the enemy halves of the
+three paint atlases were inspected.
 
-Not checked: a real flight in the simulator, the cockpit view, firing all six
-missiles in the game, the 500 m refusal from the pilot's seat, and flares
-dispensing and seducing in a live dogfight. Those need a display, a gamepad
-and a pilot; the corresponding boxes in `plans/fablefight/TASKS.md` are left
-unchecked.
+Not checked: a real flight in the simulator, the cockpit view (the radar page
+and RWR were only shader-validated, not looked at in the aircraft), firing all
+six missiles in the game, gamepad behaviour, a live arena session on each jet,
+the flare dispenser's visuals, bandit audibility in the mix, and the tracer
+visuals. Those need a display, a gamepad and a pilot; the corresponding boxes
+in `plans/fablefight/TASKS.md` are left unchecked.

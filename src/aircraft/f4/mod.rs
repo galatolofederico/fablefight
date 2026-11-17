@@ -321,7 +321,7 @@ pub static SPEC: Spec = Spec {
     origin: None,
     ext: None,
     still: include_bytes!("../../../assets/aircraft/f4.png"),
-    paint: Some(Paint { jpg: include_bytes!("../../../assets/f4_paint.jpg"), views: 4, span: 13.2, length: 19.8, centre: [0.4, 1.0], relief: 1.0, sheen: 0.0 }),
+    paint: Some(Paint { jpg: include_bytes!("../../../assets/f4_paint.jpg"), views: 4, aggressor: true, span: 13.2, length: 19.8, centre: [0.4, 1.0], relief: 1.0, sheen: 0.0 }),
     build,
     groups: [("fuselage", 8_000.0), ("tail", 1_000.0), ("left wing", 1_500.0), ("right wing", 1_500.0), ("nose section", 1_100.0), ("radome", 80.0), ("gear", 600.0)],
     span: W_X1,

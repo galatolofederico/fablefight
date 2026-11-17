@@ -44,7 +44,27 @@ pub struct Warn {
     pub gear: bool,
     /// the missile seeker's growl: 0 silent, 0.1 searching, up to 1 locked
     pub seeker: f32,
+    /// the radar warning receiver: a bandit's radar is painting the player, 0..1
+    pub rwr: f32,
+    /// a missile is guiding on the player (no AI aircraft launches one yet,
+    /// but the tone is wired for when they do)
+    pub launch: bool,
 }
+
+/// One bandit's engines as heard from the camera. Only the nearest
+/// `BANDIT_VOICES` are played (see `Params::set_bandit_engines`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RemoteEngine {
+    /// Distance from the camera (m).
+    pub dist: f32,
+    /// -1 left .. 1 right.
+    pub pan: f32,
+    /// Fan speed, 0..1.
+    pub n1: f32,
+    /// How far its afterburner is lit, 0..1.
+    pub burner: f32,
+}
+pub const BANDIT_VOICES: usize = 4;
 
 /// What the sound is made from, set once a frame.
 #[derive(Clone, Copy, Default, Debug)]
@@ -108,11 +128,24 @@ pub struct Params {
     pub rain: f32,
     pub hail: f32,
     pub warn: Warn,
+    /// The nearest bandit engines (the rest are silent).
+    pub bandits: [RemoteEngine; BANDIT_VOICES],
 }
 
 impl Params {
     fn vne_or(&self) -> f32 {
         if self.vne > 0.0 { self.vne } else { 83.9 }
+    }
+    /// Keep only the four nearest bandit engines, however many are in the
+    /// fight: the voice budget is fixed, as the engine sounds are the most
+    /// expensive per emitter.
+    pub fn set_bandit_engines(&mut self, voices: &[RemoteEngine]) {
+        self.bandits = [RemoteEngine::default(); BANDIT_VOICES];
+        let mut kept: Vec<RemoteEngine> = voices.iter().copied().filter(|v| v.dist.is_finite() && v.n1 > 0.02).collect();
+        kept.sort_by(|a, b| a.dist.total_cmp(&b.dist));
+        for (slot, v) in self.bandits.iter_mut().zip(kept) {
+            *slot = v;
+        }
     }
 }
 
@@ -142,6 +175,9 @@ pub enum Event {
     /// a cannon firing: how near the aircraft's own gun is (1: this aircraft's,
     /// less for one heard across the sky), and its bearing (-1 left .. 1 right)
     Gun { near: f32, pan: f32 },
+    /// a flare leaving its dispenser: how near the camera it is (0.2 .. 1) and
+    /// its bearing (-1 left .. 1 right)
+    Flare { near: f32, pan: f32 },
 }
 
 #[derive(Default)]
@@ -1064,12 +1100,16 @@ struct Alarms {
     gear_env: f32,
     seek_ph: f32,
     seek_env: f32,
+    rwr_ph: f32,
+    rwr_env: f32,
+    launch_ph: f32,
+    launch_env: f32,
     env_k: f32,
 }
 
 impl Alarms {
     fn new() -> Self {
-        Self { t: 0.0, beep_ph: 0.0, beep_f: 1000.0, beep_env: 0.0, horn_ph: 0.0, horn_env: 0.0, vib: 0.0, clack_ph: 0.0, clack: [Bq::new(Bq::ring, 2400.0, 22.0), Bq::new(Bq::ring, 950.0, 14.0)], gear_ph: 0.0, gear_env: 0.0, seek_ph: 0.0, seek_env: 0.0, env_k: kf(80.0) }
+        Self { t: 0.0, beep_ph: 0.0, beep_f: 1000.0, beep_env: 0.0, horn_ph: 0.0, horn_env: 0.0, vib: 0.0, clack_ph: 0.0, clack: [Bq::new(Bq::ring, 2400.0, 22.0), Bq::new(Bq::ring, 950.0, 14.0)], gear_ph: 0.0, gear_env: 0.0, seek_ph: 0.0, seek_env: 0.0, rwr_ph: 0.0, rwr_env: 0.0, launch_ph: 0.0, launch_env: 0.0, env_k: kf(80.0) }
     }
     fn sample(&mut self, w: &Warn) -> f32 {
         self.t = (self.t + DT) % 240.0;
@@ -1139,6 +1179,24 @@ impl Alarms {
             }
         } else {
             self.seek_env += (0.0 - self.seek_env) * self.env_k * 0.7;
+        }
+        // RWR: a fast, dry warble while a threat's radar paints the aircraft;
+        // closer threats make it quicker and louder.
+        let rwr = w.rwr.clamp(0.0, 1.0);
+        let rwr_on = rwr > 0.01 && (t * (5.0 + 4.0 * rwr)).fract() < 0.32;
+        self.rwr_env += ((if rwr_on { 1.0 } else { 0.0 }) * (0.15 + 0.35 * rwr) - self.rwr_env) * self.env_k;
+        if self.rwr_env > 1e-4 {
+            self.rwr_ph = (self.rwr_ph + (1350.0 + 250.0 * rwr) * DT).fract();
+            let x = TAU * self.rwr_ph;
+            out += (x.sin() + 0.3 * (2.0 * x).sin()) * self.rwr_env;
+        }
+        // A missile launch warning: a hard two-tone warble, faster than the RWR.
+        let launch_on = w.launch && (t * 7.0).fract() < 0.55;
+        self.launch_env += ((if launch_on { 1.0 } else { 0.0 }) * 0.55 - self.launch_env) * self.env_k;
+        if self.launch_env > 1e-4 {
+            let f = if (t * 13.0).fract() < 0.5 { 780.0 } else { 1160.0 };
+            self.launch_ph = (self.launch_ph + f * DT).fract();
+            out += (TAU * self.launch_ph).sin() * self.launch_env;
         }
         out
     }
@@ -1411,6 +1469,48 @@ impl Cabin {
     }
 }
 
+/// A bandit's engines, heard from the camera: the cheap synthesized turbofan
+/// voice (the player's recorded loops are too heavy to play four more times),
+/// its level from the distance and its place in the stereo field from the
+/// bearing. An emitter-lite stand-in, not a recording of the type.
+struct Remote {
+    jet: Jet,
+    roar: Bq,
+    n1: f32,
+    burner: f32,
+    pan: f32,
+    gain: f32,
+}
+
+impl Remote {
+    fn new() -> Self {
+        Self { jet: Jet::new(), roar: Bq::new(Bq::lp, 420.0, 0.7), n1: 0.0, burner: 0.0, pan: 0.0, gain: 0.0 }
+    }
+    fn control(&mut self, v: RemoteEngine) {
+        let k = kt(0.15);
+        self.n1 += (v.n1.max(0.0) - self.n1) * k;
+        self.burner += (v.burner.max(0.0) - self.burner) * k;
+        self.pan += (v.pan.clamp(-1.0, 1.0) - self.pan) * k;
+        let d = v.dist.max(1.0);
+        let g = (500.0 / (d + 180.0)).min(1.4) * smooth(0.02, 0.15, self.n1);
+        self.gain += (if v.n1 > 0.02 { g } else { 0.0 } - self.gain) * k;
+        let p = Params { n1: self.n1, power: 0.2 + 0.8 * self.n1, ..Default::default() };
+        self.jet.control(&p);
+
+        self.roar.lp(240.0 + 520.0 * self.n1, 0.7);
+    }
+    fn sample(&mut self, live: f32, rng: &mut Rng) -> (f32, f32) {
+        if self.gain < 1e-4 || live < 0.001 {
+            return (0.0, 0.0);
+        }
+        let p = Params { n1: self.n1, power: 0.2 + 0.8 * self.n1, health: 1.0, ..Default::default() };
+        let core = self.jet.sample(&p, rng);
+        let roar = self.roar.run(rng.f()) * (0.18 + 0.7 * self.n1 + 1.1 * self.burner);
+        let y = (core * 0.7 + roar * 0.9) * self.gain * live;
+        pan(y, self.pan)
+    }
+}
+
 struct Synth {
     s: Arc<Shared>,
     n: u32,
@@ -1422,6 +1522,7 @@ struct Synth {
     jet: Jet,
     fighter: Fighter,
     rocket: Rocket,
+    remote: [Remote; BANDIT_VOICES],
     wind: Wind,
     body: Body,
     voices: Vec<Voice>,
@@ -1455,6 +1556,7 @@ impl Synth {
             jet: Jet::new(),
             fighter: Fighter::new(),
             rocket: Rocket::new(),
+            remote: std::array::from_fn(|_| Remote::new()),
             wind: Wind::new(),
             body: Body::new(),
             voices: Vec::with_capacity(MAX_VOICES),
@@ -1541,6 +1643,15 @@ impl Synth {
                     self.push(v);
                 }
             }
+            Event::Flare { near, pan } => {
+                // The dispenser's thump, then the flare's hiss falling away behind.
+                let s = near.clamp(0.15, 1.0);
+                let v = Voice::new(0.55, pan.clamp(-1.0, 1.0), Bus::Mid)
+                    .tone(r.range(95.0, 125.0), 55.0, 0.35 * s, 0.09)
+                    .noise(1900.0, 700.0, 0.7, 1.1 * s, 0.22)
+                    .pulses(210.0, 35.0, true, 0.25 * s);
+                self.push(v);
+            }
             Event::Splash(s) => {
                 let s = s.min(2.0);
                 let pn = r.range(-0.3, 0.3);
@@ -1624,6 +1735,7 @@ impl Synth {
         (p.jet, p.fighter, p.vne) = (t.jet, t.fighter, t.vne);
         p.four = t.four;
         (p.rocket, p.air) = (t.rocket, t.air);
+        p.bandits = t.bandits;
         p.health = if t.health <= 0.0 { 0.0 } else { p.health };
         p.warn = t.warn;
         if p.live < 0.01 {
@@ -1635,6 +1747,9 @@ impl Synth {
         self.jet.control(&p);
         self.fighter.control(&p, self.t.burner > 0.5);
         self.rocket.control(&p);
+        for (r, v) in self.remote.iter_mut().zip(p.bandits) {
+            r.control(v);
+        }
         self.wind.control(&p);
         self.body.control(&p);
         for v in &mut self.voices {
@@ -1717,6 +1832,13 @@ impl Iterator for Synth {
             } else {
                 i += 1;
             }
+        }
+
+        // The bandits' engines, already panned and faded by distance.
+        for r in &mut self.remote {
+            let (l, rr) = r.sample(p.live, rng);
+            ml += l;
+            mr += rr;
         }
 
         // Outside: everything, fading and dulling with distance; the
@@ -1988,10 +2110,40 @@ mod tests {
     fn warnings_sound() {
         let base = Params { airspeed: 40.0, rpm: 0.0, ..flying() };
         let quiet = rms(&render(base, &[], 1.0));
-        for w in [Warn { stall: 1.0, ..Default::default() }, Warn { pull_up: true, ..Default::default() }, Warn { dive: 0.5, ..Default::default() }, Warn { too_low: true, ..Default::default() }, Warn { sink: true, ..Default::default() }, Warn { overspeed: 1.0, ..Default::default() }, Warn { gear: true, ..Default::default() }] {
+        for w in [
+            Warn { stall: 1.0, ..Default::default() },
+            Warn { pull_up: true, ..Default::default() },
+            Warn { dive: 0.5, ..Default::default() },
+            Warn { too_low: true, ..Default::default() },
+            Warn { sink: true, ..Default::default() },
+            Warn { overspeed: 1.0, ..Default::default() },
+            Warn { gear: true, ..Default::default() },
+            Warn { rwr: 1.0, ..Default::default() },
+            Warn { launch: true, ..Default::default() },
+        ] {
             let loud = rms(&render(Params { warn: w, ..base }, &[], 1.0));
             assert!(db(loud, quiet) > 3.0, "{w:?} barely audible: {:.1} dB", db(loud, quiet));
         }
+    }
+
+    #[test]
+    fn bandit_engine_voices_are_capped_at_four() {
+        let many: Vec<RemoteEngine> = (0..12)
+            .map(|i| RemoteEngine { dist: 120.0 + i as f32 * 80.0, pan: (i as f32 / 6.0) - 1.0, n1: 0.8, burner: 0.0 })
+            .collect();
+        let mut p = Params::default();
+        p.set_bandit_engines(&many);
+        assert_eq!(p.bandits.iter().filter(|b| b.dist > 0.0).count(), BANDIT_VOICES);
+        // It is the nearest four that are kept, in order.
+        assert!((p.bandits[0].dist - 120.0).abs() < 1.0e-3);
+        assert!((p.bandits[3].dist - 360.0).abs() < 1.0e-3);
+        assert!(p.bandits.windows(2).all(|w| w[0].dist <= w[1].dist));
+        // A dozen engines in the fight still make only four voices, and the
+        // mix stays finite and in range.
+        let mut q = Params { jet: 1.0, fighter: 1.0, n1: 0.9, rpm: 12_000.0, power: 0.9, throttle: 0.9, vne: 170.0, ..flying() };
+        q.set_bandit_engines(&many);
+        let x = render(q, &[], 1.0);
+        assert!(x.iter().all(|v| v[0].is_finite() && v[1].is_finite() && v[0].abs() <= 1.0 && v[1].abs() <= 1.0));
     }
 
     #[test]

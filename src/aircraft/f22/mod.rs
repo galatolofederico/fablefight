@@ -316,7 +316,7 @@ pub static SPEC: Spec = Spec {
     origin: None,
     ext: None,
     still: include_bytes!("../../../assets/aircraft/f22.png"),
-    paint: Some(Paint { jpg: include_bytes!("../../../assets/f22_paint.jpg"), views: 4, span: 14.4, length: 21.6, centre: [0.4, 1.0], relief: 1.0, sheen: 0.0 }),
+    paint: Some(Paint { jpg: include_bytes!("../../../assets/f22_paint.jpg"), views: 4, aggressor: true, span: 14.4, length: 21.6, centre: [0.4, 1.0], relief: 1.0, sheen: 0.0 }),
     build,
     groups: [("fuselage", 11_500.0), ("tail", 1_800.0), ("left wing", 2_200.0), ("right wing", 2_200.0), ("nose section", 1_300.0), ("radome", 90.0), ("gear", 800.0)],
     span: W_X1,

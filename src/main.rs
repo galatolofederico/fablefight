@@ -3114,6 +3114,12 @@ impl Game {
                 self.flash.push((msg.into(), self.real));
             }
             weapons::Event::Flare { pos, vel } => {
+                if let Some(a) = &self.audio {
+                    let d = pos - self.cam_pos;
+                    let near = 1.0 / (1.0 + (d.length() as f32 / 120.0).powi(2));
+                    let pan = if d.length() > 1.0 { d.normalize().dot(self.plane.right()) as f32 } else { 0.0 };
+                    a.event(audio::Event::Flare { near: 0.2 + 0.8 * near, pan });
+                }
                 let r = &mut self.rng;
                 femit.push((pos, render::Particle {
                     vel: vel.as_vec3().into(),
@@ -3381,11 +3387,15 @@ impl Game {
     }
 
     /// Tell the sound what the aircraft and the camera are doing.
-    fn update_audio(&mut self, cam: DVec3, fire: f32, in_menu: bool, c: &Controls, dt: f64, scrape: f32) {
+    #[allow(clippy::too_many_arguments)]
+    fn update_audio(&mut self, cam: DVec3, cam_right: DVec3, fire: f32, in_menu: bool, c: &Controls, dt: f64, scrape: f32) {
         self.warn = if dt > 0.0 { self.warnings() } else { audio::Warn::default() };
         let live = !self.crashed && !in_menu && dt > 0.0;
         if live {
             self.warn.seeker = self.weapons.seeker_tone;
+            // RWR: any bandit whose radar is painting the player. No AI
+            // aircraft carries a missile yet, so the launch warning stays off.
+            self.warn.rwr = self.bandits.alive().filter(|(_, b)| b.ai.target_seen).count().min(3) as f32 / 3.0;
         }
         let p = &self.plane;
         let up = p.pos.normalize();
@@ -3422,7 +3432,19 @@ impl Game {
         // The sound was tuned on the light single: a jet's airflow is scaled to match.
         let jet = !matches!(p.spec.sound, aircraft::Sound::Piston | aircraft::Sound::Rocket);
         let sk = if jet { 0.45 } else { 1.0 };
-        let params = audio::Params {
+        // The bandits' engines: distance and bearing from the camera. The
+        // sound keeps only the four nearest however many are in the arena.
+        let mut voices = Vec::new();
+        for (_, b) in self.bandits.alive() {
+            let d = b.plane.pos - cam;
+            let dist = d.length();
+            if dist > 12_000.0 {
+                continue;
+            }
+            let pan = if dist > 1.0 { d.normalize_or_zero().dot(cam_right) } else { 0.0 };
+            voices.push(audio::RemoteEngine { dist: dist as f32, pan: pan.clamp(-1.0, 1.0) as f32, n1: b.plane.n1 as f32, burner: b.plane.burner as f32 });
+        }
+        let mut params = audio::Params {
             live: if live { 1.0 } else { 0.0 },
             master: if self.sound_on { self.volume } else { 0.0 },
             rpm: (p.prop_rate * 60.0 / std::f64::consts::TAU) as f32,
@@ -3459,7 +3481,9 @@ impl Game {
             rain: if in_menu { 0.0 } else { self.cam_rain },
             hail: if in_menu { 0.0 } else { self.cam_hail },
             warn: self.warn,
+            bandits: [audio::RemoteEngine::default(); audio::BANDIT_VOICES],
         };
+        params.set_bandit_engines(&voices);
         if let Some(a) = &self.audio {
             for e in events {
                 a.event(e);
@@ -4254,7 +4278,8 @@ impl Game {
             self.rain_field.step(dt, cam, self.wx.at(cam, agl, self.time));
         }
         let scrape = if steps > 0 { (scrape_n as f32 / steps as f32 * 0.5).min(1.0) } else { 0.0 };
-        self.update_audio(cam, fire, in_menu, &c, dt, scrape);
+        let cam_right = dir.cross(upv).normalize_or_zero();
+        self.update_audio(cam, cam_right, fire, in_menu, &c, dt, scrape);
 
         let near = if in_menu { (calt * 0.02).clamp(0.4, 20_000.0) as f32 } else if self.cam_mode == 1 && !self.crashed { 0.03f32 } else { 0.25f32 };
         let proj = perspective_rev(fov, w / h, near);
@@ -4652,7 +4677,8 @@ impl Game {
                     objs.push(DrawObj {
                         mesh: meshes[i],
                         model: base * pose[i],
-                        tint: [blur, burner, 0.0, 0.0],
+                        // (tint.w < 0: a bandit, so plane.wgsl picks the aggressor livery.)
+                        tint: [blur, burner, 0.0, -1.0],
                         glow: [0.0, kind, 0.0, 0.0],
                         params,
                         cast: 1 << render::PLANE_LAYER,
@@ -4681,6 +4707,7 @@ impl Game {
                         objs.push(DrawObj {
                             mesh: meshes[i],
                             model: swing * pose[i],
+                            tint: [0.0, 0.0, 0.0, -1.0],
                             glow: [0.0, kind, 0.0, 0.0],
                             params,
                             cast: 1 << render::PLANE_LAYER,
@@ -4822,7 +4849,8 @@ impl Game {
             self.lightning.segments(cam, dt, &mut bolts);
         }
         let rain_drops = if in_menu || self.cam_rain < 0.002 { 0 } else { render::RAIN_DROPS };
-        self.r.render(Frame { rain_drops, bolts, g, tiles, details, photo, skins, skin_slots, fields, lights: air_lights, objs, insts, fall, near, casc_vp, shore: sf.step, shore_c, shore_tiles, psim, sim_steps: dt > 0.0, fluid, ocean: self.world.water_in_view().then(|| self.world.ocean.uniform()), egui: Some(ui), shot, logo: (in_menu && self.menu.hangar.is_none()).then(|| self.window.scale_factor() as f32), cover, glow: glow_px });
+        let radar = radar_uniform(&self.plane, &self.bandits);
+        self.r.render(Frame { rain_drops, bolts, g, tiles, details, photo, skins, skin_slots, radar, fields, lights: air_lights, objs, insts, fall, near, casc_vp, shore: sf.step, shore_c, shore_tiles, psim, sim_steps: dt > 0.0, fluid, ocean: self.world.water_in_view().then(|| self.world.ocean.uniform()), egui: Some(ui), shot, logo: (in_menu && self.menu.hangar.is_none()).then(|| self.window.scale_factor() as f32), cover, glow: glow_px });
         self.finish_mcp_shots();
         if (had_shots && std::env::args().any(|a| a == "--shot") && self.record.is_none()) || rec_done {
             self.quit = true;
@@ -7142,6 +7170,56 @@ fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// One bandit as the cockpit radar and RWR see it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RadarContact {
+    /// Bearing from the player's nose, positive to the right (rad).
+    bearing: f32,
+    /// Slant range (m).
+    range: f32,
+    /// The bandit's radar is painting the player.
+    painting: bool,
+    /// Rate of closure (m/s, positive closing).
+    closure: f32,
+}
+
+/// The radar scope: 40 nm, ±60° off the nose (the "40" printed on the page).
+const RADAR_SCOPE_RANGE: f32 = 40.0 * 1_852.0;
+const RADAR_SCOPE_AZ: f32 = 60.0 * std::f32::consts::PI / 180.0;
+/// The RWR's ring scale: 20 km, about the bandit radar's own reach.
+const RWR_RANGE: f32 = 20_000.0;
+
+/// Every living bandit by bearing and range from the player: what the radar
+/// page draws, and what the RWR filters to the threats painting the player.
+fn radar_contacts(plane: &Plane, bandits: &bandits::Bandits) -> Vec<RadarContact> {
+    let fwd = plane.forward();
+    let right = plane.right();
+    let up = plane.pos.normalize();
+    bandits
+        .alive()
+        .map(|(_, b)| {
+            let d = b.plane.pos - plane.pos;
+            let range = d.length();
+            let flat = d - up * d.dot(up);
+            let bearing = flat.dot(right).atan2(flat.dot(fwd));
+            let closure = if range > 1.0 { -(d.dot(b.plane.vel - plane.vel) / range) } else { 0.0 };
+            RadarContact { bearing: bearing as f32, range: range as f32, painting: b.ai.target_seen, closure: closure as f32 }
+        })
+        .collect()
+}
+
+/// The four nearest contacts, as the radar page and RWR bind them.
+fn radar_uniform(plane: &Plane, bandits: &bandits::Bandits) -> render::RadarU {
+    let mut contacts = radar_contacts(plane, bandits);
+    contacts.sort_by(|a, b| a.range.total_cmp(&b.range));
+    let mut u = render::RadarU::default();
+    u.info = [contacts.len().min(4) as f32, RADAR_SCOPE_RANGE, RADAR_SCOPE_AZ, RWR_RANGE];
+    for (slot, c) in u.contacts.iter_mut().zip(contacts.iter()) {
+        *slot = [c.bearing, c.range, if c.painting { 1.0 } else { 0.0 }, c.closure];
+    }
+    u
+}
+
 /// The gun's pipper: where the rounds must be sent to meet a target moving as
 /// it is, given the muzzle speed. First order lead: the time of flight is the
 /// range over the round's closing speed along the line of sight, and the
@@ -7208,6 +7286,49 @@ fn open_gamepads() -> Option<gilrs::Gilrs> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn radar_contacts_match_the_world_bearing_and_range() {
+        let spec = &aircraft::fa18::SPEC;
+        let player = Plane::spawn(spec, 0.0, 0.0, 3_000.0, 0.0, 250.0);
+        let mut bandits = bandits::Bandits::new();
+        let i = bandits.spawn(spec, player.pos, player.forward(), 250.0);
+        let fwd = player.forward();
+        let right = player.right();
+        let b = bandits.items[i].as_mut().unwrap();
+        // 3 km ahead and 4 km to the right: a 5 km contact 53.1° right of the nose.
+        b.plane.pos = player.pos + fwd * 3_000.0 + right * 4_000.0;
+        b.plane.vel = player.vel - fwd * 100.0;
+        b.ai.target_seen = true;
+        let c = radar_contacts(&player, &bandits);
+        assert_eq!(c.len(), 1);
+        assert!((c[0].range - 5_000.0).abs() < 1.0e-3, "range {}", c[0].range);
+        let want = (4_000.0f32).atan2(3_000.0);
+        // (The 3 km altitude bends the tangent plane slightly: a few 1e-4 rad.)
+        assert!((c[0].bearing - want).abs() < 1.0e-3, "bearing {} want {want}", c[0].bearing);
+        assert!(c[0].painting);
+        // Closing head-on at 100 m/s along the 3-4-5 line: 60 m/s of closure.
+        assert!((c[0].closure - 60.0).abs() < 0.1, "closure {}", c[0].closure);
+        assert_eq!(radar_uniform(&player, &bandits).info[0], 1.0);
+    }
+
+    #[test]
+    fn the_rwr_lists_exactly_the_bandits_painting_the_player() {
+        let spec = &aircraft::fa18::SPEC;
+        let player = Plane::spawn(spec, 0.0, 0.0, 3_000.0, 0.0, 250.0);
+        let mut bandits = bandits::Bandits::new();
+        let a = bandits.spawn(spec, player.pos + player.forward() * 2_000.0, player.forward(), 250.0);
+        let b = bandits.spawn(spec, player.pos + player.forward() * 6_000.0, player.forward(), 250.0);
+        bandits.items[a].as_mut().unwrap().ai.target_seen = true;
+        bandits.items[b].as_mut().unwrap().ai.target_seen = false;
+        let threats: Vec<_> = radar_contacts(&player, &bandits).into_iter().filter(|c| c.painting).collect();
+        assert_eq!(threats.len(), 1, "the RWR must show only the painting bandit");
+        assert!((threats[0].range - 2_000.0).abs() < 1.0e-3, "wrong threat: {}", threats[0].range);
+        // Both remain radar contacts, painting or not.
+        let u = radar_uniform(&player, &bandits);
+        assert_eq!(u.info[0], 2.0);
+        assert_eq!(u.contacts.iter().filter(|c| c[2] > 0.5).count(), 1);
+    }
 
     #[test]
     fn the_pipper_leads_a_crossing_target_and_sits_on_a_still_one() {

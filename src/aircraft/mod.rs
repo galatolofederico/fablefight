@@ -395,11 +395,15 @@ pub struct MissileStation {
 /// (`hornet_paint`). `span` x `length` (m) is the rectangle each picture
 /// covers, GUIDE_SPAN and GUIDE_LEN in the type's Blender script; `centre`
 /// the station ahead of the datum and the height above it at the middle of
-/// the pictures (GUIDE_Y, GUIDE_Z).
+/// the pictures (GUIDE_Y, GUIDE_Z). With `aggressor` the same pictures again
+/// follow, wearing the enemy's fictional aggressor livery.
 #[derive(Clone)]
 pub struct Paint {
     pub jpg: &'static [u8],
     pub views: u32,
+    /// The atlas also carries the fictional aggressor livery, after the
+    /// player's pictures: the same `views` again, laid out in the same order.
+    pub aggressor: bool,
     pub span: f64,
     pub length: f64,
     pub centre: [f64; 2],

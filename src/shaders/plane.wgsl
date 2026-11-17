@@ -37,7 +37,8 @@ const P_PIT = 18u; const P_MESH = 19u; const P_WEBBING = 20u; const P_NONSLIP = 
 // each picture covers, across (and up the side views) and fore and aft; how
 // far the pictures' edges are from the datum, ahead and below. PT.view.x: how
 // many pictures (0: it has no paint); .y: how much relief its lines stand
-// for; .z: how much its sheen follows its tone (a dark paint's panels).
+// for; .z: how much its sheen follows its tone (a dark paint's panels);
+// .w where the enemy's aggressor pictures start in the atlas (0: none).
 @group(1) @binding(1) var t_paint: texture_2d_array<f32>;
 // A downloaded aircraft's meshes bind its own textures there instead (fgmodel.rs):
 // layer `layer` (< 0: none), repeating.
@@ -48,6 +49,13 @@ fn tex_at(uv: vec2f, layer: f32, dx: vec2f, dy: vec2f) -> vec4f {
 struct Paint { box: vec4f, view: vec4f };
 @group(1) @binding(2) var<uniform> PT: Paint;
 
+// The fight as the cockpit's radar page and RWR see it (main.rs `radar_uniform`):
+// up to four contacts as (bearing right of the nose, rad; slant range, m; 1
+// while the bandit's radar paints the player; closure, m/s), then (count,
+// scope range, azimuth limit, RWR range). Empty in free flight.
+struct Radar { contacts: array<vec4f, 4>, info: vec4f };
+@group(1) @binding(3) var<uniform> RD: Radar;
+
 // Which aircraft is being drawn (aircraft::Spec::id, carried in glow.y): 0 the
 // light single, 1 the 747, 2 the Hornet, 3 the Phantom, 4 the Raptor, 5 the Starship rocket. Its windows, wells,
 // paint and panel lines differ. tint.y and tint.z carry the engines: how far the afterburners
@@ -57,6 +65,11 @@ const KIND: u32 = 99u;
 // instrument faces and displays, 0 left out (drawn by their own pipeline), 1 drawn.
 const INSTR: u32 = 1u;
 fn kind() -> u32 { if (KIND < 99u) { return KIND; } return u32(O.glow.y + 0.5); }
+// A bandit: main.rs marks its instances in tint.w (negative; the player's own
+// aircraft and everything that has come off it carry a non-negative value).
+fn enemy() -> bool { return O.tint.w < -0.5; }
+// Where the enemy's pictures begin in the paint atlas, or 0 for the player.
+fn enemy_layer() -> i32 { if (enemy() && PT.view.w > 0.5) { return i32(PT.view.w + 0.5); } return 0; }
 // The fighters: modelled in Blender, their paint a picture, one blown canopy over a tub.
 fn fighter() -> bool { return (kind() >= 2u && kind() <= 4u) || kind() == 7u; }
 // The engines, of the aircraft being flown only (wreckage and parts that have come off carry a glow.x).
@@ -1501,10 +1514,11 @@ fn hornet_paint(L: vec3f, Nl: vec3f, dLx: vec3f, dLy: vec3f) -> vec4f {
   w /= sum;
   let v = (L.z + off.y) / box.y;
   let dv = vec2f(dLx.z, dLy.z) / box.y;
+  let el = enemy_layer();
   var c = vec3f(0.0);
-  if (w.x > 0.004) { c += w.x * textureSampleGrad(t_paint, s_aniso, vec2f((L.x + off.x) / box.x, v), 0, vec2f(dLx.x / box.x, dv.x), vec2f(dLy.x / box.x, dv.y)).rgb; }
-  if (w.y > 0.004) { c += w.y * textureSampleGrad(t_paint, s_aniso, vec2f((off.x - L.x) / box.x, v), 1, vec2f(-dLx.x / box.x, dv.x), vec2f(-dLy.x / box.x, dv.y)).rgb; }
-  if (w.z > 0.004) { c += w.z * textureSampleGrad(t_paint, s_aniso, vec2f((L.y + off.z) / box.x, v), 2 + select(0, 1, PT.view.x > 3.5 && n.x > 0.0), vec2f(dLx.y / box.x, dv.x), vec2f(dLy.y / box.x, dv.y)).rgb; }
+  if (w.x > 0.004) { c += w.x * textureSampleGrad(t_paint, s_aniso, vec2f((L.x + off.x) / box.x, v), el, vec2f(dLx.x / box.x, dv.x), vec2f(dLy.x / box.x, dv.y)).rgb; }
+  if (w.y > 0.004) { c += w.y * textureSampleGrad(t_paint, s_aniso, vec2f((off.x - L.x) / box.x, v), el + 1, vec2f(-dLx.x / box.x, dv.x), vec2f(-dLy.x / box.x, dv.y)).rgb; }
+  if (w.z > 0.004) { c += w.z * textureSampleGrad(t_paint, s_aniso, vec2f((L.y + off.z) / box.x, v), el + 2 + select(0, 1, PT.view.x > 3.5 && n.x > 0.0), vec2f(dLx.y / box.x, dv.x), vec2f(dLy.y / box.x, dv.y)).rgb; }
   return vec4f(c, 1.0);
 }
 

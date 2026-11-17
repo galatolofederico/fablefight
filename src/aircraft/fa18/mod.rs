@@ -366,7 +366,7 @@ pub static SPEC: Spec = Spec {
     ext: None,
     blurb: "Twin-engine carrier fighter, 15.5 t. Fly-by-wire holds it to 7.5 g; Space for afterburner, / speedbrake. 135 kt approach. 4 lock, 5 fire, 6 cannon, 7 flares.",
     still: include_bytes!("../../../assets/aircraft/fa18.png"),
-    paint: Some(Paint { jpg: include_bytes!("../../../assets/fa18_paint.jpg"), views: 3, span: 13.2, length: 19.8, centre: [0.4, 1.0], relief: 1.0, sheen: 0.0 }),
+    paint: Some(Paint { jpg: include_bytes!("../../../assets/fa18_paint.jpg"), views: 3, aggressor: true, span: 13.2, length: 19.8, centre: [0.4, 1.0], relief: 1.0, sheen: 0.0 }),
     build,
     groups: [("fuselage", 6_500.0), ("tail", 900.0), ("left wing", 1_200.0), ("right wing", 1_200.0), ("nose section", 900.0), ("radome", 60.0), ("gear", 500.0)],
     span: W_X1,

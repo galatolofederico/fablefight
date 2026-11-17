@@ -322,7 +322,7 @@ pub static SPEC: Spec = Spec {
     origin: None,
     ext: None,
     still: include_bytes!("../../../assets/aircraft/concorde.png"),
-    paint: Some(Paint { jpg: include_bytes!("../../../assets/concorde_paint.jpg"), views: 4, span: 44.0, length: 66.0, centre: [2.17, 1.0], relief: 1.0, sheen: 0.0 }),
+    paint: Some(Paint { jpg: include_bytes!("../../../assets/concorde_paint.jpg"), views: 4, aggressor: false, span: 44.0, length: 66.0, centre: [2.17, 1.0], relief: 1.0, sheen: 0.0 }),
     build,
     groups: [("fuselage", 34_000.0), ("tail", 4_500.0), ("left wing", 15_000.0), ("right wing", 15_000.0), ("flight deck", 3_500.0), ("nose", 700.0), ("gear", 6_000.0)],
     span: W_X1,
