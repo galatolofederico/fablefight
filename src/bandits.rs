@@ -25,6 +25,7 @@ pub const WRECK_DWELL: f64 = 6.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KillBy {
     Missile,
+    Gun,
     Collision,
 }
 
