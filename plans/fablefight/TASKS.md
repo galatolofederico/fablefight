@@ -205,34 +205,34 @@ cargo run --release -- --fly-check f22
 
 ### Implementation
 
-- [ ] 5.1 Create `src/arena.rs` with the `Arena` structure and `Arena::step(h, &mut Bandits, &PlayerState)`.
-- [ ] 5.2 In `src/arena.rs`, implement wave escalation: one bandit, then two, then three, capped at two simultaneously alive, endless thereafter.
-- [ ] 5.3 In `src/arena.rs`, implement player death, an 8 s timer, and an airborne respawn with a full magazine and full flare load.
-- [ ] 5.4 In `src/arena.rs`, implement the kills and deaths tally and the kill feed entries `SPLASH`, `GUN`, `MID-AIR`, each attributed by weapon.
-- [ ] 5.5 In `src/main.rs`, draw the kill feed and the tally on the HUD with an age-based fade.
-- [ ] 5.6 In `src/main.rs`, draw the target designator: diamond, range, closure, and off-screen threat arrows for bandits outside the view.
-- [ ] 5.7 In `src/menu.rs`, add a dogfight entry that spawns the player airborne a few miles out at altitude with bandits 8 nm ahead, keeping the current world and live traffic.
-- [ ] 5.8 In `src/weapons.rs`, restrict target collection to bandits while in dogfight mode so live ADS-B and airport traffic cannot be locked.
+- [x] 5.1 Create `src/arena.rs` with the `Arena` structure and `Arena::step(h, &mut Bandits, &PlayerState)`.
+- [x] 5.2 In `src/arena.rs`, implement wave escalation: one bandit, then two, then three, capped at two simultaneously alive, endless thereafter.
+- [x] 5.3 In `src/arena.rs`, implement player death, an 8 s timer, and an airborne respawn with a full magazine and full flare load.
+- [x] 5.4 In `src/arena.rs`, implement the kills and deaths tally and the kill feed entries `SPLASH`, `GUN`, `MID-AIR`, each attributed by weapon.
+- [x] 5.5 In `src/main.rs`, draw the kill feed and the tally on the HUD with an age-based fade.
+- [x] 5.6 In `src/main.rs`, draw the target designator: diamond, range, closure, and off-screen threat arrows for bandits outside the view.
+- [x] 5.7 In `src/menu.rs`, add a dogfight entry that spawns the player airborne a few miles out at altitude with bandits 8 nm ahead, keeping the current world and live traffic.
+- [x] 5.8 In `src/weapons.rs`, restrict target collection to bandits while in dogfight mode so live ADS-B and airport traffic cannot be locked.
 
 ### Tests
 
-- [ ] 5.9 Add a unit test in `src/arena.rs` asserting the wave sequence never puts more than two bandits alive at once.
-- [ ] 5.10 Add a unit test in `src/arena.rs` asserting the respawn timer is exactly 8 s and restores full stores and flares.
-- [ ] 5.11 Add a unit test in `src/arena.rs` asserting kills and deaths accumulate independently and that a mid-air collision counts one of each.
-- [ ] 5.12 Add a unit test in `src/arena.rs` asserting kill-feed entries expire after their documented lifetime.
-- [ ] 5.13 Add a unit test in `src/weapons.rs` asserting that dogfight mode produces no live or traffic targets even when both are present in the world.
-- [ ] 5.14 Add an integration test in `tests/` covering spawn, one kill, one player death and respawn in a headless arena run.
+- [x] 5.9 Add a unit test in `src/arena.rs` asserting the wave sequence never puts more than two bandits alive at once.
+- [x] 5.10 Add a unit test in `src/arena.rs` asserting the respawn timer is exactly 8 s and restores full stores and flares.
+- [x] 5.11 Add a unit test in `src/arena.rs` asserting kills and deaths accumulate independently and that a mid-air collision counts one of each.
+- [x] 5.12 Add a unit test in `src/arena.rs` asserting kill-feed entries expire after their documented lifetime.
+- [x] 5.13 Add a unit test in `src/weapons.rs` asserting that dogfight mode produces no live or traffic targets even when both are present in the world.
+- [x] 5.14 Add an integration test in `tests/` covering spawn, one kill, one player death and respawn in a headless arena run.
 
 ### Verification
 
-- [ ] Run `cargo check`; it exits 0.
-- [ ] Run `cargo test`; it exits 0 and all tests pass, including the six added above.
+- [x] Run `cargo check`; it exits 0.
+- [x] Run `cargo test`; it exits 0 and all tests pass, including the six added above.
 - [ ] Run `cargo run --release -- --aircraft fa18`; entering the dogfight mode spawns airborne with bandits ahead.
 - [ ] Manually fight through three waves and confirm escalation, the two-aircraft cap, the kill feed and the tally.
 - [ ] Manually die and confirm the 8 s respawn with full stores.
 - [ ] Confirm that in dogfight mode no ADS-B or airport traffic can be locked or hit.
 - [ ] Confirm the frame time holds with two bandits, tracers and missile trails on screen.
-- [ ] Confirm no new skipped, quarantined or failing tests.
+- [x] Confirm no new skipped, quarantined or failing tests.
 
 **Done when:** a complete arena loop runs end to end from spawn to death to respawn with working scoring.
 
