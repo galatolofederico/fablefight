@@ -119,34 +119,34 @@ cargo run --release -- --fly-check f22
 
 ### Implementation
 
-- [ ] 3.1 Create `src/guns.rs` with `Round`, `Guns`, `Guns::step(h, ...)` and `Guns::fire(shooter, origin, direction)`, using the 6000 rpm fractional accumulation described in `PLAN.md`.
-- [ ] 3.2 In `src/guns.rs`, implement swept-segment hit detection against the hull spheres of every bandit and of the player.
-- [ ] 3.3 In `src/guns.rs`, apply hits through `Plane::blast` with an energy scaled by the 20 mm round, not by the existing missile warhead power.
-- [ ] 3.4 In `src/aircraft/mod.rs`, add `Spec::gun` carrying magazine size, rate and dispersion, and populate it for the three fighters from researched references recorded in a comment.
-- [ ] 3.5 In `src/main.rs`, wire `fire_cannon` to a held trigger, cap live rounds at 2000, and stop firing and stop consuming ammunition at the magazine limit.
-- [ ] 3.6 In `src/main.rs`, emit tracer particles from the muzzle using the existing particle ring buffer, and a muzzle flash light.
-- [ ] 3.7 In `src/audio.rs`, add gunfire voices with a rate-limited per-shot click so 100 rounds/s does not swamp the mixer.
-- [ ] 3.8 In `src/main.rs`, draw a lead-computing pipper on the HUD for the locked target, computed from target range and closure.
-- [ ] 3.9 In `src/ai.rs`, allow bandits to fire the cannon inside a range gate using the existing `Skill::aim_error` rather than perfect lead.
-- [ ] 3.10 In `src/main.rs`, show remaining cannon rounds and a "GUNS DRY" HUD state.
+- [x] 3.1 Create `src/guns.rs` with `Round`, `Guns`, `Guns::step(h, ...)` and `Guns::fire(shooter, origin, direction)`, using the 6000 rpm fractional accumulation described in `PLAN.md`.
+- [x] 3.2 In `src/guns.rs`, implement swept-segment hit detection against the hull spheres of every bandit and of the player.
+- [x] 3.3 In `src/guns.rs`, apply hits through `Plane::blast` with an energy scaled by the 20 mm round, not by the existing missile warhead power.
+- [x] 3.4 In `src/aircraft/mod.rs`, add `Spec::gun` carrying magazine size, rate and dispersion, and populate it for the three fighters from researched references recorded in a comment.
+- [x] 3.5 In `src/main.rs`, wire `fire_cannon` to a held trigger, cap live rounds at 2000, and stop firing and stop consuming ammunition at the magazine limit.
+- [x] 3.6 In `src/main.rs`, emit tracer particles from the muzzle using the existing particle ring buffer, and a muzzle flash light.
+- [x] 3.7 In `src/audio.rs`, add gunfire voices with a rate-limited per-shot click so 100 rounds/s does not swamp the mixer.
+- [x] 3.8 In `src/main.rs`, draw a lead-computing pipper on the HUD for the locked target, computed from target range and closure.
+- [x] 3.9 In `src/ai.rs`, allow bandits to fire the cannon inside a range gate using the existing `Skill::aim_error` rather than perfect lead.
+- [x] 3.10 In `src/main.rs`, show remaining cannon rounds and a "GUNS DRY" HUD state.
 
 ### Tests
 
-- [ ] 3.11 Add a unit test in `src/guns.rs` asserting the round count fired over one second is within one round of 100.
-- [ ] 3.12 Add a unit test in `src/guns.rs` asserting the magazine depletes to zero and that further trigger presses spawn no rounds.
-- [ ] 3.13 Add a unit test in `src/guns.rs` asserting a round travelling 5.7 m per step still hits a 0.6 m target placed between the endpoints, proving the swept test.
-- [ ] 3.14 Add a unit test in `src/guns.rs` asserting a grazing pass outside the hull radius registers no hit.
-- [ ] 3.15 Add a unit test in `src/main.rs` asserting the pipper position differs from the aim point when the target has lateral velocity and coincides when closure is zero.
-- [ ] 3.16 Add a unit test in `src/ai.rs` asserting a bandit does not fire outside its range gate.
+- [x] 3.11 Add a unit test in `src/guns.rs` asserting the round count fired over one second is within one round of 100.
+- [x] 3.12 Add a unit test in `src/guns.rs` asserting the magazine depletes to zero and that further trigger presses spawn no rounds.
+- [x] 3.13 Add a unit test in `src/guns.rs` asserting a round travelling 5.7 m per step still hits a 0.6 m target placed between the endpoints, proving the swept test.
+- [x] 3.14 Add a unit test in `src/guns.rs` asserting a grazing pass outside the hull radius registers no hit.
+- [x] 3.15 Add a unit test in `src/main.rs` asserting the pipper position differs from the aim point when the target has lateral velocity and coincides when closure is zero.
+- [x] 3.16 Add a unit test in `src/ai.rs` asserting a bandit does not fire outside its range gate.
 
 ### Verification
 
-- [ ] Run `cargo check`; it exits 0.
-- [ ] Run `cargo test`; it exits 0 and all tests pass, including the six added above.
+- [x] Run `cargo check`; it exits 0.
+- [x] Run `cargo test`; it exits 0 and all tests pass, including the six added above.
 - [ ] Run `cargo run --release -- --aircraft fa18`; the cannon fires, tracers are visible, rounds damage a bandit, and the pipper leads a crossing target.
 - [ ] Manually fire the full magazine against a manoeuvring bandit and confirm the dry state and that no rounds spawn afterwards.
 - [ ] Confirm audio does not clip or stutter at maximum rate of fire.
-- [ ] Confirm no new skipped, quarantined or failing tests.
+- [x] Confirm no new skipped, quarantined or failing tests.
 
 **Done when:** cannon fire is a real projectile weapon with finite ammunition, a visible pipper, and hits that remove structure.
 
