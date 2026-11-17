@@ -119,6 +119,4 @@ The copilot can read the aircraft, navigation, weather, traffic and airports, an
 # Contributions
 Please contribute anything if you want to! Improvements to flight sim realism, graphics, optimization, UI, and especially plane models are needed! (((=
 
-For substantial AI-assisted contributions, use Claude Opus 5.5, GPT-6 Astra, Claude Fable, or a model with equivalent or greater capability. Sonnet, GPT-6.1 Sol, and less capable models should only handle simple fixes or very small features; switch to a stronger model for larger tasks, including aircraft creation and flight-model tuning. See [AGENTS.md](AGENTS.md) for the full guidance.
-
 I personally recommend using Opus 5.5 high for most tasks. If you don't have a routine for conserving tokens a general rule of thumb is to give models specific tasks (e.g. decompose the cockpit and plane body into different prompts) and keep conversations to one prompt, starting a new chat if refinement is needed.
