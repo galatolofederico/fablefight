@@ -7,21 +7,39 @@
 //!
 //! Body frame (as in airframe.rs): +X right, +Y up, -Z forward, the origin at
 //! the centre of gravity.
+// FableFight flies three fighters. The civil modules stay declared and
+// compiling because shared code still depends on them, but they are no longer
+// in `BUILTIN` and so do not appear in the menu or the hangar gallery:
+// - `src/plane.rs:615-620` calls `c172::kinematics` for gear animation on
+//   every aircraft type;
+// - `src/render.rs:1483` embeds `b747::deck::strings_wgsl()` in the object
+//   shader source;
+// - `src/hangar.rs:887-894` uses the Cessna, Hornet and 747 specs as stand-in
+//   bodies when fitting downloaded aircraft.
+// Do not delete them without decoupling those three call sites first.
+#[allow(dead_code)]
 pub mod b747;
+#[allow(dead_code)]
 pub mod c172;
+#[allow(dead_code)]
 pub mod concorde;
+#[allow(dead_code)]
 pub mod dr400;
 pub mod f22;
 pub mod f4;
 pub mod fa18;
+#[allow(dead_code)]
 pub mod sr71;
+#[allow(dead_code)]
 pub mod starship;
 
 use crate::airframe::{Model, Sect};
 use glam::{DVec3, Vec3};
 
-/// The types built into the game, in the order the menu lists them.
-pub static BUILTIN: [&Spec; 9] = [&c172::SPEC, &dr400::SPEC, &b747::SPEC, &fa18::SPEC, &f4::SPEC, &f22::SPEC, &starship::SPEC, &concorde::SPEC, &sr71::SPEC];
+/// The types built into the game, in the order the menu lists them: Hornet,
+/// Phantom, Raptor. Their `Spec::id`s (2, 3, 4) are the shader's aircraft
+/// kinds and must never be renumbered; the retired civil ids stay unused.
+pub static BUILTIN: [&Spec; 3] = [&fa18::SPEC, &f4::SPEC, &f22::SPEC];
 
 /// Types added while the game runs: JSBSim aircraft the player downloaded
 /// (see hangar.rs), each flying with a stand-in from `BUILTIN` as its body.
@@ -556,5 +574,26 @@ impl Spec {
     }
     pub fn max_notch(&self) -> u8 {
         (self.flaps.len().max(1) - 1) as u8
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_lists_exactly_the_three_fighters() {
+        assert_eq!(BUILTIN.len(), 3);
+        let keys: Vec<&str> = BUILTIN.iter().map(|s| s.keys[0]).collect();
+        assert_eq!(keys, ["fa18", "f4", "f22"]);
+    }
+
+    #[test]
+    fn fighter_ids_keep_their_shader_kinds() {
+        let ids: Vec<u32> = BUILTIN.iter().map(|s| s.id).collect();
+        assert_eq!(ids, [2, 3, 4]);
+        for retired in [0, 1, 5, 6, 7, 8] {
+            assert!(!BUILTIN.iter().any(|s| s.id == retired), "retired id {retired} is still in BUILTIN");
+        }
     }
 }
