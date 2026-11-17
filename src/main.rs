@@ -19,6 +19,7 @@ mod frame_pacer;
 mod fgmodel;
 mod fluid;
 mod gputime;
+mod guns;
 mod geo;
 mod hangar;
 mod hangar_ui;
@@ -768,6 +769,10 @@ struct Game {
     plane: Plane,
     /// the F/A-18's missiles: master arm, seeker and the two wingtip shots
     weapons: weapons::Weapons,
+    /// the cannon: rounds in the air, the player's belt and each bandit's
+    guns: guns::Guns,
+    /// the locked target's position and velocity, for the gun's pipper
+    gun_target: Option<(DVec3, DVec3)>,
     /// the AI aircraft in the fight
     bandits: bandits::Bandits,
     crashed: bool,
@@ -856,6 +861,8 @@ struct Game {
     pad_home: bool,
     /// afterburner toggled by the gamepad's D-pad up (the keyboard holds Space)
     pad_boost: bool,
+    /// the gamepad's cannon trigger (RB) held
+    pad_cannon: bool,
     /// the camera is locked to the weapon target (gamepad Y, or J)
     padlock: bool,
     /// the camera look the view starts out at (right stick click goes back to it)
@@ -1131,13 +1138,13 @@ impl Game {
             cam_yaw: cy.to_radians(), cam_pitch: cp, cam_dist: cd, cam_mode: if args.cockpit { 1 } else { prefs.cam_mode }, cam_pos, cam_dir: -plane.forward(), cam_look: plane.pos, orbit: 0.0, cam_rise: 0.0, cam_clear_t: 0.0, cam_ang: None, cam_hold: 0.0,
             utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, gfx_applied: None, prev_plane: Mat4::IDENTITY, plane_box, lamps,
             frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, goto_open: false, goto_text: String::new(), goto_rx: None,
-            status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_move: None, pad_skip: None, pad_rep: None, pad_home: false, pad_boost: false, padlock: false, parking_brake: false, cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
+            status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_move: None, pad_skip: None, pad_rep: None, pad_home: false, pad_boost: false, pad_cannon: false, padlock: false, parking_brake: false, cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
             record: args.record.clone(), rec_audio: Vec::new(), rec_n: 0, rec_t0: Instant::now(), sound_on: prefs.sound_on, volume: prefs.volume, info_open: false, info_page: menu::Page::Flight, pause_open: false, pause_page: menu::Page::Game, pause_at: args.pause_menu, look_sens: prefs.look_sens, head: cockpit::Head::new(cy.to_radians(), cp), cockpit_fov: args.fov.unwrap_or(prefs.cockpit_fov).clamp(30.0, 90.0), head_live: false, warn: audio::Warn::default(), warn_t: [-10.0; 4],
             g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), weapon_flash: None, damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
-            start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, city_glow: 0.0, skyglow: Default::default(), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, storm_adapt: 0.0, plane, weapons, bandits: bandits::Bandits::new(),
+            start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, city_glow: 0.0, skyglow: Default::default(), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, storm_adapt: 0.0, plane, weapons, guns: guns::Guns::new(secs.to_bits() | 1), gun_target: None, bandits: bandits::Bandits::new(),
             airport_rx: None, hold_spot: None,
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
@@ -1164,6 +1171,7 @@ impl Game {
             mcp_throttle: None,
             throttle_axis: None,
         };
+        g.guns.reset(spec);
         if args.mcp {
             match mcp::rpc::serve(args.mcp_port) {
                 Ok(rx) => g.mcp_calls = Some(rx),
@@ -1236,6 +1244,7 @@ impl Game {
         self.r.set_paint(spec.paint.as_ref());
         self.spec = spec;
         self.weapons.reset(spec, &self.model.pieces);
+        self.guns.reset(spec);
         self.cam_dist = spec.cam_dist;
         self.menu.aircraft = aircraft::index_of(spec);
         self.bandits.reset();
@@ -1448,6 +1457,8 @@ impl Game {
         (self.g_slow, self.was_ground, self.prev_vs, self.prev_gear, self.prev_flaps) = (1.0, false, 0.0, self.plane.gear, self.plane.flaps);
         self.gauges = gauges::Gauges::new(&self.plane, self.frame ^ 0x9e37);
         self.weapons.reset(self.spec, &self.model.pieces);
+        self.guns.reset(self.spec);
+        self.gun_target = None;
         self.weapon_flash = None;
         self.bandits.reset();
         self.spawn_bandit();
@@ -1475,7 +1486,8 @@ impl Game {
         }
         let at = self.plane.pos + fwd * 5_000.0 + up * 300.0;
         // Head-on, so it sees the player and the fight starts.
-        self.bandits.spawn(self.spec, at, -fwd, self.spec.cruise);
+        let i = self.bandits.spawn(self.spec, at, -fwd, self.spec.cruise);
+        self.guns.bandit_spawned(i as u32, self.spec);
         self.flash.push((t!("BANDIT INBOUND", "BANDIT EN APPROCHE").into(), self.real));
     }
 
@@ -1729,6 +1741,8 @@ impl Game {
     /// crash A starts again.
     fn gamepad(&mut self, dt: f64, c: &mut Controls) {
         use gilrs::{Axis, Button, EventType};
+        // (Cleared every frame: with no pad, or in the menus, the trigger is up.)
+        self.pad_cannon = false;
         let Some(g) = self.gilrs.as_mut() else { return };
         let (mut pressed, mut relayout) = (Vec::new(), false);
         while let Some(ev) = g.next_event() {
@@ -1815,6 +1829,8 @@ impl Game {
         };
         let modifier = pad.is_pressed(Button::North);
         let flying = self.mode == Mode::Fly && !self.pause_open;
+        // RB is the cannon's trigger, held down: a rate, not a tap.
+        self.pad_cannon = flying && pad.is_pressed(Button::RightTrigger);
         self.pad = Controls {
             pitch: -dz(pad.value(Axis::LeftStickY)),
             roll: dz(pad.value(Axis::LeftStickX)),
@@ -2463,7 +2479,6 @@ impl Game {
                 self.status_until = self.real + 2.0;
             }
             (_, Button::LeftTrigger) if !self.crashed => self.key(KeyCode::Digit5),
-            (_, Button::RightTrigger) if !self.crashed => self.key(KeyCode::Digit6),
             (_, Button::LeftThumb) if !self.crashed => self.plane.toggle_gear(),
             _ => {}
         }
@@ -2860,6 +2875,85 @@ impl Game {
             a.boom(1.5);
         }
         self.flash.push((t!("MID-AIR COLLISION", "COLLISION EN VOL").into(), self.real));
+    }
+
+    /// A cannon round leaving a muzzle or striking an aircraft: the flash, the
+    /// sparks, the sound, and the kill feed.
+    fn gun_event(&mut self, ev: guns::Event, femit: &mut Vec<(DVec3, render::Particle)>) {
+        match ev {
+            guns::Event::Fired { by, at, dir } => {
+                let own = by == guns::Shooter::Player;
+                {
+                    let r = &mut self.rng;
+                    // The tracer leaves the muzzle here; the rounds themselves
+                    // carry it on (see the per-frame tracers below).
+                    femit.push((at, render::Particle {
+                        vel: (dir * (guns::MUZZLE_SPEED * 0.35)).as_vec3().into(),
+                        life: 0.045,
+                        size0: 0.12,
+                        size1: 0.06,
+                        kind: crash::SPARK,
+                        drag: 0.0,
+                        seed: r.f(),
+                        alpha: 0.9,
+                        ..Default::default()
+                    }));
+                    femit.push((at, render::Particle {
+                        vel: (dir * r.range(20.0, 45.0) as f64).as_vec3().into(),
+                        life: 0.05,
+                        size0: r.range(0.4, 0.7),
+                        size1: 0.2,
+                        kind: crash::FLASH,
+                        seed: r.f(),
+                        alpha: 1.0,
+                        ..Default::default()
+                    }));
+                }
+                // The flash lights the aircraft for a moment. A missile's
+                // fireball already in progress is not cut short by it.
+                let big = self.weapon_flash.is_some_and(|(_, p, t)| p > 0.5 && self.real - t < 0.45);
+                if !big {
+                    self.weapon_flash = Some((at, 0.5, self.real));
+                }
+                if let Some(a) = &self.audio {
+                    let (near, pan) = if own {
+                        (1.0f32, 0.0)
+                    } else {
+                        let d = (at - self.cam_pos).length();
+                        let right = self.cam_dir.cross(self.plane.pos.normalize()).normalize_or_zero();
+                        let to = (at - self.cam_pos).normalize_or_zero();
+                        ((1.0 / (1.0 + (d / 600.0).powi(2))) as f32, to.dot(right).clamp(-1.0, 1.0) as f32)
+                    };
+                    a.event(audio::Event::Gun { near, pan });
+                }
+            }
+            guns::Event::Hit { at, on, kill } => {
+                {
+                    let r = &mut self.rng;
+                    for _ in 0..5 {
+                        femit.push((at, render::Particle {
+                            vel: (r.dir() * r.range(8.0, 30.0)).into(),
+                            life: r.range(0.2, 0.6),
+                            size0: r.range(0.04, 0.10),
+                            size1: 0.02,
+                            kind: crash::SPARK,
+                            drag: 0.8,
+                            seed: r.f(),
+                            alpha: 0.9,
+                            ..Default::default()
+                        }));
+                    }
+                }
+                if let (true, guns::Shooter::Bandit(i)) = (kill, on) {
+                    self.anchor_fx(at);
+                    self.blast_fx(at, 1.0, 1.0, femit);
+                    self.weapon_flash = Some((at, 0.9, self.real));
+                    let label = self.bandits.get(i as usize).map(|b| b.label.clone()).unwrap_or_default();
+                    let msg = if label.is_empty() { t!("GUN KILL", "ABATTU AU CANON").to_string() } else { t!("GUN KILL  {}", "ABATTU AU CANON  {}", label) };
+                    self.flash.push((msg, self.real));
+                }
+            }
+        }
     }
 
     /// A weapon-system event: status messages, the launch sound, and a
@@ -3430,6 +3524,10 @@ impl Game {
             };
             let static_targets = weapon_targets.len();
             let has_weapons = self.weapons.has_weapons();
+            // The cannon's trigger: the key (or a bound button) held, or RB.
+            // The gun itself is gated on the electrical bus, and a wreck has
+            // no one left to pull the trigger.
+            let cannon = !self.plane.wrecked() && (self.keys.contains(&KeyCode::Digit6) || self.pad_cannon);
             self.acc += dt;
             let h = 1.0 / 180.0;
             while self.acc >= h {
@@ -3471,9 +3569,16 @@ impl Game {
                     self.bandits.append_targets(&mut weapon_targets);
                 }
                 let powered = self.plane.sys.powered();
+                // Cannon: the player's trigger held, and the bandits' own.
+                for ev in self.guns.step(h, cannon && powered, &mut self.plane, &mut self.bandits) {
+                    self.gun_event(ev, &mut femit);
+                }
                 for ev in self.weapons.step(h, &self.plane, &weapon_targets, &self.world, powered) {
                     self.weapon_event(ev, &mut femit);
                 }
+                // What the pipper needs of the locked target: where it is and
+                // how it is moving, from the same list the seeker saw.
+                self.gun_target = self.weapons.target.as_ref().and_then(|k| weapon_targets.iter().find(|t| &t.key == k)).map(|t| (t.pos, t.vel));
                 self.gauges.update(h, &self.plane, self.time);
                 steps += 1;
                 scrape_n += self.plane.sparks.len();
@@ -3760,6 +3865,27 @@ impl Game {
                         ..Default::default()
                     });
                 }
+            }
+            self.r.emit(&trail);
+        }
+        // Cannon tracers: a bright dash at every live round, so a burst reads
+        // as a stream from the muzzle to whatever it hits.
+        if !in_menu && !self.guns.rounds.is_empty() {
+            let mut trail = Vec::with_capacity(self.guns.rounds.len());
+            for r in &self.guns.rounds {
+                let g = &mut self.rng;
+                trail.push(render::Particle {
+                    pos: (r.pos - self.fx_anchor).as_vec3().into(),
+                    vel: (r.vel * 0.35).as_vec3().into(),
+                    life: 0.045,
+                    size0: 0.10,
+                    size1: 0.05,
+                    kind: crash::SPARK,
+                    drag: 0.0,
+                    seed: g.f(),
+                    alpha: 0.9,
+                    ..Default::default()
+                });
             }
             self.r.emit(&trail);
         }
@@ -5916,6 +6042,14 @@ impl Game {
                             };
                             shadow(ui, line, 14.0, col);
                         }
+                        if self.guns.has_gun() {
+                            let dry = self.guns.ammo == 0;
+                            let col = if dry || !p.sys.powered() { Color32::from_rgb(255, 180, 50) } else { dim };
+                            shadow(ui, format!("GUN  {:>3} / {}  {}", self.guns.ammo, self.guns.magazine(), p.spec.gun().map_or("", |g| g.name)), 14.0, col);
+                            if dry {
+                                shadow(ui, t!("GUNS DRY", "CHARGEURS VIDES").into(), 20.0, Color32::from_rgb(255, 90, 60));
+                            }
+                        }
                         if p.gear < 1.0 && agl < 150.0 && p.throttle < 0.35 && !self.crashed {
                             if pad {
                                 ui.horizontal(|ui| {
@@ -6024,6 +6158,29 @@ impl Game {
                             let pos = at + egui::vec2(0.0, r + 22.0);
                             painter.text(pos + egui::vec2(1.0, 1.0), Align2::CENTER_TOP, &line, FontId::monospace(12.0), Color32::from_black_alpha(180));
                             painter.text(pos, Align2::CENTER_TOP, &line, FontId::monospace(12.0), col);
+                        }
+                    }
+                }
+            }
+            // The gun's pipper: where a round must be sent to meet the locked
+            // target, led from its range and motion.
+            if let (true, Some((vp, cam))) = (self.show_hud, self.live_view) {
+                if let (Some(t), Some((_, tvel)), true) = (&self.weapons.target_view, self.gun_target, self.weapons.lock >= 1.0 && self.guns.has_gun()) {
+                    if let Some(lead) = gun_lead(self.plane.pos, t.pos, tvel, self.plane.vel, guns::MUZZLE_SPEED) {
+                        let screen = ctx.content_rect();
+                        let c = vp * (lead - cam).as_vec3().extend(1.0);
+                        if c.w > 0.0 {
+                            let at = egui::pos2(screen.left() + (c.x / c.w * 0.5 + 0.5) * screen.width(), screen.top() + (0.5 - c.y / c.w * 0.5) * screen.height());
+                            if screen.contains(at) {
+                                let painter = ctx.layer_painter(egui::LayerId::background());
+                                let col = Color32::from_rgb(255, 210, 90);
+                                painter.circle_stroke(at, 6.0, egui::Stroke::new(1.5, col));
+                                painter.circle_filled(at, 1.6, col);
+                                // A tick on each side, as a gun sight's cross has.
+                                for (a, b) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+                                    painter.line_segment([at + egui::vec2(a * 9.0, b * 9.0), at + egui::vec2(a * 13.0, b * 13.0)], egui::Stroke::new(1.0, col));
+                                }
+                            }
                         }
                     }
                 }
@@ -6717,6 +6874,24 @@ fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// The gun's pipper: where the rounds must be sent to meet a target moving as
+/// it is, given the muzzle speed. First order lead: the time of flight is the
+/// range over the round's closing speed along the line of sight, and the
+/// target moves on by its own motion in that time. The rounds share the
+/// shooter's velocity, so only the target's motion relative to the shooter
+/// matters: a target flying the same way as the gun is not led at all.
+fn gun_lead(shooter: DVec3, target: DVec3, target_vel: DVec3, shooter_vel: DVec3, muzzle: f64) -> Option<DVec3> {
+    let d = target - shooter;
+    let range = d.length();
+    if range < 1.0 {
+        return None;
+    }
+    let los = d / range;
+    let closing = (muzzle + (shooter_vel - target_vel).dot(los)).max(1.0);
+    let t_go = range / closing;
+    Some(target + (target_vel - shooter_vel) * t_go)
+}
+
 /// +1, -1 or 0 from a pair of buttons.
 fn ax_pad(pos: bool, neg: bool) -> f64 {
     (pos as i32 - neg as i32) as f64
@@ -6760,4 +6935,33 @@ fn open_gamepads() -> Option<gilrs::Gilrs> {
         log::info!("gamepad: {} mapping {:?}", p.os_name(), p.mapping_source());
     }
     Some(g)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pipper_leads_a_crossing_target_and_sits_on_a_still_one() {
+        let shooter = DVec3::ZERO;
+        let ahead = DVec3::new(0.0, 0.0, -1_000.0);
+        let los = ahead.normalize();
+        // A target crossing at 200 m/s a kilometre ahead (no closure along the
+        // line of sight, all of it lateral): the pipper is thrown out along
+        // its motion by the time of flight, so it is not the aim point.
+        let crossing = DVec3::new(200.0, 0.0, 0.0);
+        let lead = gun_lead(shooter, ahead, crossing, DVec3::ZERO, guns::MUZZLE_SPEED).unwrap();
+        let aimed = (lead - shooter).normalize();
+        assert!(aimed.angle_between(los) > 0.08, "the pipper did not lead: {:.3} rad", aimed.angle_between(los));
+        assert!((lead - ahead).dot(crossing.normalize()) > 100.0, "the lead is the wrong way: {lead:?}");
+        // No relative motion at all (zero closure, no crossing): the pipper is
+        // the aim point.
+        let still = gun_lead(shooter, ahead, DVec3::ZERO, DVec3::ZERO, guns::MUZZLE_SPEED).unwrap();
+        assert!((still - ahead).length() < 1.0e-9);
+        assert!((still - shooter).normalize().angle_between(los) < 1.0e-9);
+        // A target closing straight down the line of sight is led along it,
+        // which puts the pipper on the same bearing as the target.
+        let closing = gun_lead(shooter, ahead, DVec3::new(0.0, 0.0, 200.0), DVec3::ZERO, guns::MUZZLE_SPEED).unwrap();
+        assert!((closing - shooter).normalize().angle_between(los) < 1.0e-9);
+    }
 }
