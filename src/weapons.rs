@@ -6,7 +6,8 @@
 //! rest of the aircraft know nothing about them; `main.rs` feeds in the target
 //! list each fixed step and turns the events into sound, particles and damage.
 //! Targets are live ADS-B aircraft, airport traffic, or the AI bandits
-//! (`TargetKey::Bandit`).
+//! (`TargetKey::Bandit`). In dogfight mode (`Weapons::dogfight`) only the AI
+//! aircraft can be locked: the traffic stays in the world as ambience.
 //!
 //! A missile is a simple boost-and-coast body: it leaves its station with the
 //! aircraft's velocity, burns for a couple of seconds, then drags down while
@@ -188,6 +189,10 @@ pub struct Missile {
 pub struct Weapons {
     pub stations: Vec<Station>,
     pub armed: bool,
+    /// Dogfight mode: only the AI aircraft are shootable. Live ADS-B and
+    /// airport traffic are in the world as ambience and can neither be locked
+    /// nor hit, whatever the caller puts in the target list.
+    pub dogfight: bool,
     /// How complete the lock is, 0..1.
     pub lock: f64,
     pub target: Option<TargetKey>,
@@ -214,6 +219,7 @@ impl Weapons {
         let mut w = Self {
             stations: Vec::new(),
             armed: true,
+            dogfight: false,
             lock: 0.0,
             target: None,
             target_view: None,
@@ -268,6 +274,12 @@ impl Weapons {
         !self.stations.is_empty()
     }
 
+    /// May the seeker use this target? In dogfight mode only the AI aircraft:
+    /// live ADS-B and airport traffic are ambience, not targets.
+    pub fn shootable(&self, key: &TargetKey) -> bool {
+        !self.dogfight || matches!(key, TargetKey::Bandit(_))
+    }
+
     pub fn station(&self, i: usize) -> Option<&Station> {
         self.stations.get(i)
     }
@@ -314,6 +326,17 @@ impl Weapons {
         powered: bool,
     ) -> Vec<Event> {
         let mut events = Vec::new();
+        // In dogfight mode a target list may still hold the traffic the world
+        // draws around the fight; none of it is shootable. Filter before the
+        // seeker or any missile sees it, so live ADS-B and airport traffic can
+        // never be locked or hit by mistake.
+        let picky: Vec<Target>;
+        let targets: &[Target] = if self.dogfight {
+            picky = targets.iter().filter(|t| self.shootable(&t.key)).cloned().collect();
+            &picky
+        } else {
+            targets
+        };
         let can_seek = self.armed && powered && !self.stations.is_empty();
         if !can_seek {
             self.clear_lock();
@@ -1181,5 +1204,65 @@ mod tests {
         // The live target is still there and lockable.
         assert!(w.cycle_target(&plane, &targets));
         assert_eq!(w.target, Some(TargetKey::Live("LIVE01".into())));
+    }
+
+    /// A world with no terrain, as the AI and bandit tests use.
+    fn empty_world() -> crate::world::World {
+        let dir = std::env::temp_dir().join("fablegame-weapon-tests");
+        let src = std::sync::Arc::new(crate::sources::Sources::new(crate::fetch::Fetcher::new(dir, true), String::new()));
+        let mut w = crate::world::World::new(crate::sources::Loader::new(src, 0), 14);
+        w.flat = Some(0.0);
+        w
+    }
+
+    #[test]
+    fn dogfight_mode_leaves_live_and_airport_traffic_unshootable() {
+        let (mut plane, pieces) = hornet_with_missiles();
+        let mut w = Weapons::new(&crate::aircraft::fa18::SPEC, &pieces);
+        let world = empty_world();
+        let targets = [
+            Target {
+                key: TargetKey::Live("LIVE01".into()),
+                pos: plane.pos + plane.forward() * 4_000.0,
+                vel: plane.vel,
+                size: 2,
+                label: "LIVE01".into(),
+            },
+            Target {
+                key: TargetKey::Airport { apt: 1, mover: 7 },
+                pos: plane.pos + plane.forward() * 3_000.0,
+                vel: DVec3::ZERO,
+                size: 2,
+                label: "TRAFFIC".into(),
+            },
+            Target {
+                key: TargetKey::Bandit(0),
+                pos: plane.pos + plane.forward() * 5_000.0,
+                vel: plane.vel,
+                size: 1,
+                label: "BANDIT 1".into(),
+            },
+        ];
+        w.dogfight = true;
+        assert!(w.shootable(&targets[2].key), "a bandit is shootable in dogfight mode");
+        assert!(!w.shootable(&targets[0].key), "live traffic is shootable in dogfight mode");
+        assert!(!w.shootable(&targets[1].key), "airport traffic is shootable in dogfight mode");
+        // Even with both kinds of traffic nearer the nose, the seeker can only
+        // pick the bandit.
+        w.request_cycle();
+        w.step(1.0 / 180.0, &mut plane, &targets, &world, true);
+        assert_eq!(w.target, Some(TargetKey::Bandit(0)), "a traffic target was locked");
+        // With no bandit on the list there is nothing to lock at all.
+        w.clear_lock();
+        w.request_cycle();
+        let events = w.step(1.0 / 180.0, &mut plane, &targets[..2], &world, true);
+        assert!(w.target.is_none(), "traffic was locked in dogfight mode");
+        assert_eq!(w.lock, 0.0);
+        assert!(matches!(events.as_slice(), [Event::Refused(Refusal::NoTarget)]));
+        // Out of dogfight mode the same list finds the traffic again.
+        w.dogfight = false;
+        w.request_cycle();
+        w.step(1.0 / 180.0, &mut plane, &targets, &world, true);
+        assert_eq!(w.target, Some(TargetKey::Airport { apt: 1, mover: 7 }));
     }
 }
