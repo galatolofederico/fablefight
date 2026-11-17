@@ -634,6 +634,56 @@ impl Plane {
     fn scuff(&mut self, group: usize, amount: f32) {
         self.dmg.scuff[group] = (self.dmg.scuff[group] + amount).min(1.0);
     }
+    /// Inject blast energy at a body-frame point, as a missile warhead or a
+    /// cannon round does. `power` is the warhead strength `weapons.rs` passes
+    /// (1: a light missile); the same blow does far more to a wing or the tail
+    /// than to the fuselage, because it is spread over the group's mass
+    /// (`Spec::groups`). Returns the structural group hit.
+    pub fn blast(&mut self, at: Vec3, power: f32) -> Option<usize> {
+        if !(power > 0.0) {
+            return None;
+        }
+        let g = damage::group_at(self.spec, at);
+        let mass = self.spec.groups[g].1.max(200.0);
+        // A wing or the tail weighs about a tenth of the fuselage, so the
+        // same energy tears it open.
+        let k = power * (9_000.0 / mass).sqrt();
+        self.scuff(g, (0.3 * k).min(1.0));
+        match g {
+            G_LWING | G_RWING => {
+                let side = if g == G_RWING { 1 } else { 0 };
+                if k > 2.0 {
+                    // Torn off inboard enough that it cannot fly on.
+                    let st = self.spec.span * (0.60 - 0.03 * k).max(0.30);
+                    if st > 0.25 * self.spec.span {
+                        self.break_wing(side, st, "BLAST");
+                    }
+                }
+                self.dmg.hull = (self.dmg.hull + 0.25 * power).min(1.0);
+            }
+            G_TAIL => {
+                if k > 1.5 {
+                    let z = self.tail_z();
+                    self.snap_tail(z, "BLAST");
+                }
+                self.dmg.hull = (self.dmg.hull + 0.20 * power).min(1.0);
+            }
+            G_ENGINE => {
+                self.engine_hit(0.6 * power, "BLAST");
+                self.dmg.hull = (self.dmg.hull + 0.55 * power).min(1.0);
+            }
+            _ => {
+                // The fuselage takes it all: a missile warhead is enough, a
+                // few cannon rounds are not.
+                self.dmg.hull = (self.dmg.hull + 0.70 * power).min(1.0);
+                if power > 0.5 {
+                    self.dmg.smoke_black = true;
+                    self.dmg.smoke = self.dmg.smoke.max(0.5);
+                }
+            }
+        }
+        Some(g)
+    }
     /// A blow that sets it turning (rad/s for a light single; a heavy
     /// aircraft takes the same blow far more calmly).
     fn kick(&mut self, w: DVec3) {
@@ -1123,6 +1173,19 @@ impl Plane {
         self.rot_a = self.rot_a * e1 + sr * (1.0 - e1 * e1).max(0.0).sqrt() * n;
         self.rot_b = self.rot_b * e2 + self.rot_a * (1.0 - e2);
         self.gust_rot = self.rot_b * 1.118 * smooth(5.0, 25.0, v);
+    }
+
+    /// The sphere that stands in for the airframe in collisions and gunfire
+    /// (body frame: centre and radius). It encloses the fuselage from the nose
+    /// to the tail cone and the wing tips: a simplification, but one both
+    /// sides of a collision agree on.
+    pub fn hull_sphere(&self) -> (Vec3, f32) {
+        let s = self.spec;
+        let nose = s.hard[0];
+        let tail = s.hard[3];
+        let half = (tail - nose).length() * 0.5;
+        let centre = (nose + tail) * 0.5;
+        (centre.as_vec3(), half.max(s.span as f64 * 0.5) as f32)
     }
 
     /// Points on the airframe that meet the ground (body frame), as it is now:
@@ -4205,5 +4268,24 @@ mod tests {
         assert!(touched);
         assert!(p.vel.length() < 3.0, "{}", p.vel.length());
         assert!(p.dmg.gear.iter().all(|g| *g));
+    }
+
+    #[test]
+    fn a_blast_reports_the_group_it_hit() {
+        for spec in [&crate::aircraft::fa18::SPEC, &crate::aircraft::f4::SPEC, &crate::aircraft::f22::SPEC] {
+            let mut p = Plane::spawn(spec, 0.6, -2.1, 3_000.0, 0.0, 200.0);
+            // A light round: enough to be felt, not enough to tear anything off.
+            let light = 0.01;
+            assert_eq!(p.blast(Vec3::ZERO, light), Some(G_FUSE), "{} fuselage", spec.name);
+            for side in 0..2 {
+                let at = damage::wing_pt(spec, side, 0.55 * spec.span, 0.4, 0.0);
+                let want = if side == 0 { G_LWING } else { G_RWING };
+                assert_eq!(p.blast(at, light), Some(want), "{} wing {side}", spec.name);
+            }
+            assert_eq!(p.blast(spec.tail.stab_tip.as_vec3(), light), Some(G_TAIL), "{} tail", spec.name);
+            // The nose section ahead of the wing root (a jet's radar bay).
+            let nose = Vec3::new(0.0, 0.0, spec.hard[0].z as f32 + 1.0);
+            assert_eq!(p.blast(nose, light), Some(G_ENGINE), "{} nose", spec.name);
+        }
     }
 }

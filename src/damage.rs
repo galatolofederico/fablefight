@@ -716,6 +716,38 @@ impl Sheds {
     }
 }
 
+/// Which breakable group a body-frame point belongs to, from the airframe's
+/// geometry: the wing panels outboard of the fuselage, the tail surfaces
+/// behind the tail cone's break, and the nose ahead of the wing root. Used by
+/// `Plane::blast` to decide what a warhead or a round at that point hit.
+pub fn group_at(spec: &Spec, p: Vec3) -> usize {
+    let s = spec;
+    let half = s.hole.fus[0].max(0.2);
+    // The wing at this span station: its chord runs back from the leading
+    // edge (`cdir` is a unit vector, positive z aft).
+    let k = (s.wing_sect)(p.x.abs());
+    let (z0, z1) = (k.le.z.min(k.le.z + k.cdir.z * k.c), k.le.z.max(k.le.z + k.cdir.z * k.c));
+    if p.x.abs() > 0.9 * half && p.z >= z0 - 0.5 && p.z <= z1 + 0.5 && p.y >= k.le.y - 0.6 && p.y <= k.le.y + 0.8 {
+        return if p.x < 0.0 { G_LWING } else { G_RWING };
+    }
+    // Tail surfaces: anything outboard or above the rear fuselage behind the
+    // tail cone's break is the fin or a stabiliser.
+    let tl = &s.tail;
+    if p.z >= tl.break_z[0] - 1.0 {
+        let (top, _, _) = (s.fuse)(p.z);
+        if p.y > top - 0.05 || p.x.abs() > 0.75 * half {
+            return G_TAIL;
+        }
+    }
+    // The nose section (a jet's engines, a single's cowling) ahead of the wing.
+    let root = (s.wing_sect)(0.0);
+    let (top, _, bot) = (s.fuse)(p.z);
+    if p.z < root.le.z - 0.5 && p.y >= bot.min(top) - 0.4 && p.y <= top.max(bot) + 0.4 {
+        return G_ENGINE;
+    }
+    G_FUSE
+}
+
 /// Which breakable group a hard point of the airframe belongs to (see `plane::HARD`).
 pub fn hard_group(hi: usize) -> usize {
     match hi {
