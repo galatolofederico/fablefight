@@ -75,38 +75,38 @@ cargo run --release -- --fly-check f22
 
 ### Implementation
 
-- [ ] 2.1 Create `src/bandits.rs` with the `Bandit` and `Bandits` structures from `PLAN.md` § State model, plus `Bandits::spawn(spec)`, `Bandits::step(h, &World, &Plane)` and `Bandits::remove_gone()`.
-- [ ] 2.2 In `src/bandits.rs`, share one `airframe::Model` per type via the existing `Game.hangar` cache; never build a model per bandit.
-- [ ] 2.3 In `src/ai.rs`, implement `Pilot::controls` producing `plane::Controls` from the bandit state and the player's last known position, with states `Search`, `Pursue`, `Attack`, `Defend` and `Extend`.
-- [ ] 2.4 In `src/ai.rs`, implement the sensor model: the player is visible only inside the bandit's forward radar cone and range, or while one of its missiles is tracking.
-- [ ] 2.5 In `src/ai.rs`, enforce the energy rule: no commanded angle of attack above the type's stall angle, and a mandatory `Extend` state when specific energy falls below a threshold.
-- [ ] 2.6 In `src/ai.rs`, add the `Skill` parameters (aim error, reaction delay, energy aggressiveness) with an "average pilot" default and document each in a comment.
-- [ ] 2.7 In `src/plane.rs`, add `Plane::blast(at, power) -> Option<usize>` and the hull-sphere accessor used by collision and guns.
-- [ ] 2.8 In `src/damage.rs`, add the body-point-to-group mapping helper that `Plane::blast` uses, driven by `Spec::groups`.
-- [ ] 2.9 In `src/weapons.rs`, add `TargetKey::Bandit(u32)` and accept bandit targets without disturbing the existing live and traffic variants.
-- [ ] 2.10 In `src/main.rs`, step bandits and feed their targets to `Weapons` inside the existing 1/180 s fixed-step loop.
-- [ ] 2.11 In `src/main.rs`, emit one `render::Inst` and one `airframe::Input` pose per bandit, using `Plane::pose` exactly as the player aircraft does.
-- [ ] 2.12 In `src/main.rs`, detect player-to-bandit collision using swept segments between previous and current positions; destroy both aircraft and record the event.
-- [ ] 2.13 In `src/bandits.rs`, keep wrecked bandits as particle fireball plus smoke trail only, then remove them after a fixed dwell time; do not allocate a second `fluid` volume.
+- [x] 2.1 Create `src/bandits.rs` with the `Bandit` and `Bandits` structures from `PLAN.md` § State model, plus `Bandits::spawn(spec)`, `Bandits::step(h, &World, &Plane)` and `Bandits::remove_gone()`.
+- [x] 2.2 In `src/bandits.rs`, share one `airframe::Model` per type via the existing `Game.hangar` cache; never build a model per bandit.
+- [x] 2.3 In `src/ai.rs`, implement `Pilot::controls` producing `plane::Controls` from the bandit state and the player's last known position, with states `Search`, `Pursue`, `Attack`, `Defend` and `Extend`.
+- [x] 2.4 In `src/ai.rs`, implement the sensor model: the player is visible only inside the bandit's forward radar cone and range, or while one of its missiles is tracking.
+- [x] 2.5 In `src/ai.rs`, enforce the energy rule: no commanded angle of attack above the type's stall angle, and a mandatory `Extend` state when specific energy falls below a threshold.
+- [x] 2.6 In `src/ai.rs`, add the `Skill` parameters (aim error, reaction delay, energy aggressiveness) with an "average pilot" default and document each in a comment.
+- [x] 2.7 In `src/plane.rs`, add `Plane::blast(at, power) -> Option<usize>` and the hull-sphere accessor used by collision and guns.
+- [x] 2.8 In `src/damage.rs`, add the body-point-to-group mapping helper that `Plane::blast` uses, driven by `Spec::groups`.
+- [x] 2.9 In `src/weapons.rs`, add `TargetKey::Bandit(u32)` and accept bandit targets without disturbing the existing live and traffic variants.
+- [x] 2.10 In `src/main.rs`, step bandits and feed their targets to `Weapons` inside the existing 1/180 s fixed-step loop.
+- [x] 2.11 In `src/main.rs`, emit one `render::Inst` and one `airframe::Input` pose per bandit, using `Plane::pose` exactly as the player aircraft does.
+- [x] 2.12 In `src/main.rs`, detect player-to-bandit collision using swept segments between previous and current positions; destroy both aircraft and record the event.
+- [x] 2.13 In `src/bandits.rs`, keep wrecked bandits as particle fireball plus smoke trail only, then remove them after a fixed dwell time; do not allocate a second `fluid` volume.
 
 ### Tests
 
-- [ ] 2.14 Add a unit test in `src/ai.rs` asserting a bandit outside its sensor cone reports no target and enters `Search`.
-- [ ] 2.15 Add a unit test in `src/ai.rs` asserting commanded angle of attack never exceeds the type's stall angle across 1000 simulated steps.
-- [ ] 2.16 Add a unit test in `src/plane.rs` asserting `blast` returns the expected group for points in the fuselage, each wing and the tail.
-- [ ] 2.17 Add a unit test in `src/bandits.rs` asserting that destroying a bandit and calling `remove_gone` frees the slot and never reuses the index.
-- [ ] 2.18 Add an integration test in `tests/` that steps the player and one bandit headlessly, fires a missile, and asserts the bandit is destroyed and a kill is recorded.
-- [ ] 2.19 Add a unit test in `src/bandits.rs` asserting a swept collision is detected at maximum closing speed where a point test would miss.
+- [x] 2.14 Add a unit test in `src/ai.rs` asserting a bandit outside its sensor cone reports no target and enters `Search`.
+- [x] 2.15 Add a unit test in `src/ai.rs` asserting commanded angle of attack never exceeds the type's stall angle across 1000 simulated steps.
+- [x] 2.16 Add a unit test in `src/plane.rs` asserting `blast` returns the expected group for points in the fuselage, each wing and the tail.
+- [x] 2.17 Add a unit test in `src/bandits.rs` asserting that destroying a bandit and calling `remove_gone` frees the slot and never reuses the index.
+- [x] 2.18 Add an integration test in `tests/` that steps the player and one bandit headlessly, fires a missile, and asserts the bandit is destroyed and a kill is recorded.
+- [x] 2.19 Add a unit test in `src/bandits.rs` asserting a swept collision is detected at maximum closing speed where a point test would miss.
 
 ### Verification
 
-- [ ] Run `cargo check`; it exits 0.
-- [ ] Run `cargo test`; it exits 0 and all tests pass, including the six added above.
+- [x] Run `cargo check`; it exits 0.
+- [x] Run `cargo test`; it exits 0 and all tests pass, including the six added above.
 - [ ] Run `cargo run --release -- --aircraft fa18`; a bandit appears, manoeuvres, and can be locked and destroyed with a missile.
 - [ ] Manually verify the bandit stalls when slow and high, and overshoots when it turns late.
 - [ ] Manually verify that flying into a bandit destroys both aircraft.
 - [ ] Confirm the frame time with three aircraft in view has not regressed noticeably.
-- [ ] Confirm no new skipped, quarantined or failing tests.
+- [x] Confirm no new skipped, quarantined or failing tests.
 
 **Done when:** a real AI aircraft engages the player, takes damage from blasts, can be shot down, and can be collided with.
 
