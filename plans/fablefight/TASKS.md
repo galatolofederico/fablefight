@@ -206,7 +206,7 @@ cargo run --release -- --fly-check f22
 ### Implementation
 
 - [x] 5.1 Create `src/arena.rs` with the `Arena` structure and `Arena::step(h, &mut Bandits, &PlayerState)`.
-- [x] 5.2 In `src/arena.rs`, implement wave escalation: one bandit, then two, then three, capped at the configured simultaneous count (two by default), endless thereafter.
+- [x] 5.2 In `src/arena.rs`, implement endless waves that each put up the configured simultaneous bandit count (two by default, one to four on the start screen).
 - [x] 5.3 In `src/arena.rs`, implement player death, an 8 s timer, and an airborne respawn with a full magazine and full flare load.
 - [x] 5.4 In `src/arena.rs`, implement the kills and deaths tally and the kill feed entries `SPLASH`, `GUN`, `MID-AIR`, each attributed by weapon.
 - [x] 5.5 In `src/main.rs`, draw the kill feed and the tally on the HUD with an age-based fade.
@@ -228,7 +228,7 @@ cargo run --release -- --fly-check f22
 - [x] Run `cargo check`; it exits 0.
 - [x] Run `cargo test`; it exits 0 and all tests pass, including the six added above.
 - [ ] Run `cargo run --release -- --aircraft fa18`; entering the dogfight mode spawns airborne with bandits ahead.
-- [ ] Manually fight through three waves and confirm escalation, the two-aircraft cap, the kill feed and the tally.
+- [ ] Manually fight through three waves and confirm each wave's two aircraft, the cap, the kill feed and the tally.
 - [ ] Manually die and confirm the 8 s respawn with full stores.
 - [ ] Confirm that in dogfight mode no ADS-B or airport traffic can be locked or hit.
 - [ ] Confirm the frame time holds with two bandits, tracers and missile trails on screen.

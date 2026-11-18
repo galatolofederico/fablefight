@@ -2900,6 +2900,7 @@ impl Game {
         self.weapons.dogfight = false;
         self.player_kill = None;
         self.zone_out = 0.0;
+        self.minimap.cancel_zone_fit();
         self.arena.reset();
         self.bandits.reset();
     }
@@ -2916,6 +2917,9 @@ impl Game {
         let zone = arena::Zone::new(self.plane.pos, self.menu.zone_radius * 1_000.0);
         self.arena.begin_in(zone, self.menu.enemy_count as usize);
         self.bandits.zone = self.arena.zone();
+        // The default map is much more detailed than a 20 km zone: frame the
+        // whole circle on the next draw so the fight's boundary is visible.
+        self.minimap.frame_zone(zone.radius);
         self.zone_out = 0.0;
         self.status = t!("Dogfight: bandits 5 nm ahead", "Combat aérien : bandits à 5 NM").into();
         self.status_until = self.real + 10.0;

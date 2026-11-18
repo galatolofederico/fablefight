@@ -1,11 +1,10 @@
 //! The arena: waves of bandits, the player's deaths and respawns, the score
 //! and the kill feed.
 //!
-//! The fight is continuous in the world but organised in waves. The first
-//! waves grow one aircraft at a time up to the configured number of bandits;
-//! no more than that number is in the air at once, so the rest of a wave waits
-//! for a slot when the others are still flying. The waves never end: this is
-//! the arena's steady state.
+//! The fight is continuous in the world but organised in waves. Every wave
+//! puts up the configured number of bandits; no more than that number is in
+//! the air at once, so a wave's survivors must be dealt with before the next
+//! one begins. The waves never end: this is the arena's steady state.
 //!
 //! A dogfight is fought inside a circular [`Zone`] around the start point:
 //! bandits are put into the air inside it and turn back when they near its
@@ -73,16 +72,13 @@ pub fn zone_hull(hull: f32, outside: f64, h: f64) -> ZoneHull {
     }
 }
 
-/// The first waves grow one, two, three aircraft and then hold at three; a
-/// larger configured enemy count lets the fourth join at wave four.
-const WAVE_CAP: u32 = 3;
 /// The most kill-feed lines kept; old ones fall off the bottom of the list.
 const FEED_MAX: usize = 6;
 
 /// Where a wave appears: ahead of the player at the briefed set-up range of
-/// five nautical miles, 300 m above it, and one nautical mile to either side
-/// so two bandits do not share a point. A spawned bandit is brought inside the
-/// combat zone if the zone is smaller than that.
+/// five nautical miles, 300 m above it, and spread across the horizon so the
+/// four aircraft of a full wave never share a point. A spawned bandit is
+/// brought inside the combat zone if the zone is smaller than that.
 const SPAWN_AHEAD: f64 = 5.0 * 1852.0;
 const SPAWN_UP: f64 = 300.0;
 const SPAWN_SIDE: f64 = 1852.0;
@@ -245,7 +241,7 @@ impl Arena {
         self.max_alive = max_alive;
         self.started = true;
         self.wave = 1;
-        self.left = quota(1, self.max_alive);
+        self.left = self.max_alive as u32;
     }
 
     /// The running fight's zone, if it has one.
@@ -325,7 +321,7 @@ impl Arena {
             let alive = bandits.alive_count();
             if self.left == 0 && alive == 0 {
                 self.wave += 1;
-                self.left = quota(self.wave, self.max_alive);
+                self.left = self.max_alive as u32;
                 events.push(Event::Wave(self.wave));
             }
             let mut room = self.max_alive.saturating_sub(alive);
@@ -408,13 +404,6 @@ pub fn recharge(weapons: &mut Weapons, guns: &mut Guns) {
     guns.recharge();
 }
 
-/// How many bandits a wave holds: one, then two, then three, and one more for
-/// each extra bandit the caller allows in the air (up to `MAX_BANDITS`). The
-/// waves keep coming; the live cap is the configured enemy count.
-fn quota(wave: u32, cap: usize) -> u32 {
-    wave.clamp(1, WAVE_CAP.max(cap.max(1) as u32))
-}
-
 /// The player's nose along the local horizon, or its full forward vector when
 /// it is pointing straight up or down.
 fn ahead(player: &PlayerState) -> DVec3 {
@@ -430,16 +419,19 @@ fn ahead(player: &PlayerState) -> DVec3 {
 }
 
 /// Where a bandit of a wave appears: five nautical miles ahead of the player,
-/// 300 m above it, with a lateral offset that alternates right, left, none.
-/// Inside a combat zone, the point is brought in to 72% of its radius.
+/// 300 m above it, on one of four lateral stations from left to right. Each
+/// wave uses a contiguous run of at most four slots, so no two aircraft of a
+/// wave share the same point. Inside a combat zone, the point is brought in to
+/// 72% of its radius.
 fn spawn_point(player: &PlayerState, slot: u32, zone: Option<Zone>) -> DVec3 {
     let up = player.pos.normalize_or_zero();
     let fwd = ahead(player);
     let right = fwd.cross(up).normalize_or_zero();
     let side = match slot % 4 {
-        1 => 1.0,
-        2 => -1.0,
-        _ => 0.0,
+        0 => -1.5,
+        1 => -0.5,
+        2 => 0.5,
+        _ => 1.5,
     };
     let p = player.pos + fwd * SPAWN_AHEAD + right * (side * SPAWN_SIDE) + up * SPAWN_UP;
     match zone {
@@ -477,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn waves_never_put_more_than_two_bandits_in_the_air() {
+    fn every_wave_puts_up_the_configured_two_bandits() {
         let spec = &fa18::SPEC;
         let mut bandits = Bandits::new();
         let mut arena = Arena::new();
@@ -511,14 +503,12 @@ mod tests {
             }
             bandits.remove_gone();
         }
-        assert!(most <= MAX_ALIVE, "{most} bandits were in the air at once");
+        assert_eq!(most, MAX_ALIVE, "{most} bandits were in the air at once");
         assert!(wave >= 4, "only reached wave {wave}");
         let done = &per_wave[..per_wave.len() - 1];
         assert!(done.len() >= 3);
-        assert_eq!(done[0], 1, "wave one is a single bandit");
-        assert_eq!(done[1], 2, "wave two is two bandits");
-        for (k, n) in done.iter().enumerate().skip(2) {
-            assert_eq!(*n, 3, "wave {} was {n} bandits", k + 1);
+        for (k, n) in done.iter().enumerate() {
+            assert_eq!(*n, 2, "wave {} was {n} bandits", k + 1);
         }
     }
 
@@ -571,7 +561,7 @@ mod tests {
         arena.begin();
         let h = 1.0 / 180.0;
         apply(arena.step(h, &mut bandits, &player), &mut bandits, spec);
-        assert_eq!(bandits.alive_count(), 1, "wave one is one bandit");
+        assert_eq!(bandits.alive_count(), MAX_ALIVE, "wave one is the configured two bandits");
         // The first bandit goes down to a missile.
         let (i, _) = bandits.alive().next().unwrap();
         bandits.destroy(i, KillBy::Missile);
@@ -665,6 +655,17 @@ mod tests {
     }
 
     #[test]
+    fn four_bandits_in_a_wave_do_not_share_a_spawn_point() {
+        let player = player_at(3_000.0);
+        let points: Vec<_> = (0..4).map(|slot| spawn_point(&player, slot, None)).collect();
+        for (i, a) in points.iter().enumerate() {
+            for (j, b) in points.iter().enumerate().skip(i + 1) {
+                assert!((*a - *b).length() > 1_000.0, "slots {i} and {j} appeared together");
+            }
+        }
+    }
+
+    #[test]
     fn a_small_zone_clamps_the_spawn_inside_its_edge() {
         let mut bandits = Bandits::new();
         let mut arena = Arena::new();
@@ -691,6 +692,8 @@ mod tests {
         let player = player_at(3_000.0);
         arena.begin_in(Zone::new(player.pos, 20_000.0), 4);
         let h = 1.0 / 180.0;
+        apply(arena.step(h, &mut bandits, &player), &mut bandits, spec);
+        assert_eq!(bandits.alive_count(), 4, "wave one did not put up all four bandits");
         let mut most = 0;
         for _ in 0..600 {
             for ev in arena.step(h, &mut bandits, &player) {

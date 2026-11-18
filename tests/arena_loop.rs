@@ -1,4 +1,4 @@
-//! The arena, end to end: a wave appears, one bandit is shot down, the player
+//! The arena, end to end: a wave appears, both bandits are shot down, the player
 //! is killed, and comes back eight seconds later with its stores full.
 //!
 //! The game is a binary crate (the library carries only the MCP bridge), so
@@ -53,7 +53,7 @@ fn a_wave_a_kill_a_death_and_a_respawn() {
     respawns += apply(arena.step(h, &mut bandits, &player_state(&player)), &mut bandits, &mut guns) as u32;
     assert_eq!(respawns, 0);
     assert_eq!(arena.wave, 1);
-    assert_eq!(bandits.alive_count(), 1, "wave one is one bandit");
+    assert_eq!(bandits.alive_count(), 2, "wave one is the configured two bandits");
 
     // Fly the first two seconds with both aircraft alive.
     let controls = plane::Controls { throttle: 0.7, ..Default::default() };
@@ -62,16 +62,16 @@ fn a_wave_a_kill_a_death_and_a_respawn() {
         bandits.step(h, &world, &player);
         respawns += apply(arena.step(h, &mut bandits, &player_state(&player)), &mut bandits, &mut guns) as u32;
     }
-    assert_eq!(bandits.alive_count(), 1, "a second bandit joined wave one");
+    assert_eq!(bandits.alive_count(), 2, "more than the configured number joined wave one");
 
-    // The missile's blast path brings the bandit down.
-    let (i, at) = {
-        let (i, b) = bandits.alive().next().expect("the wave went away");
-        (i, b.plane.pos)
-    };
-    assert!(bandits.hit(i as u32, at, 5.0, bandits::KillBy::Missile));
+    // The missile's blast path brings both bandits down.
+    let down: Vec<_> = bandits.alive().map(|(i, b)| (i, b.plane.pos)).collect();
+    assert_eq!(down.len(), 2);
+    for (i, at) in down {
+        assert!(bandits.hit(i as u32, at, 5.0, bandits::KillBy::Missile));
+    }
     respawns += apply(arena.step(h, &mut bandits, &player_state(&player)), &mut bandits, &mut guns) as u32;
-    assert_eq!(arena.kills, 1, "the kill was not recorded");
+    assert_eq!(arena.kills, 2, "the kills were not recorded");
     assert!(
         arena.feed.iter().any(|e| e.text.contains("SPLASH") || e.text.contains("ABATTU")),
         "the kill is not in the feed: {:?}",
@@ -97,7 +97,7 @@ fn a_wave_a_kill_a_death_and_a_respawn() {
     }
     assert_eq!(respawns, 1, "the player did not come back exactly once");
     assert_eq!(arena.deaths, 1, "the same wreck was counted twice");
-    assert_eq!(arena.kills, 1);
+    assert_eq!(arena.kills, 2);
     assert_eq!(arena.respawn_in, None);
     if let (Some(before), Some((_, after))) = (before, bandits.alive().next()) {
         assert!((after.plane.pos - before).length() > 500.0, "the fight froze while the player was down");
@@ -120,6 +120,6 @@ fn a_wave_a_kill_a_death_and_a_respawn() {
     let player = Plane::spawn(spec, 37.6f64.to_radians(), -122.37f64.to_radians(), 3_000.0, 0.0, spec.cruise);
     respawns += apply(arena.step(h, &mut bandits, &player_state(&player)), &mut bandits, &mut guns) as u32;
     assert_eq!(respawns, 1, "a live aircraft asked for another respawn");
-    assert_eq!((arena.kills, arena.deaths), (1, 1), "the tally moved after the respawn");
+    assert_eq!((arena.kills, arena.deaths), (2, 1), "the tally moved after the respawn");
     assert_eq!(arena.wave, 2, "the respawn restarted the waves");
 }

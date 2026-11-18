@@ -29,6 +29,9 @@ pub struct Minimap {
     pub bottom: f32,
     /// Lowest point of the HUD panel above, which the map must not reach.
     pub top: f32,
+    /// A combat zone to frame on the next draw (metres): the map zooms out
+    /// just enough to show its boundary.
+    zone_fit: Option<f64>,
     resize_start: f32,
     maps: HashMap<TileId, MapTile>,
     map_pending: Option<(TileId, mpsc::Receiver<Option<data::Data>>)>,
@@ -171,6 +174,62 @@ fn blip_point(at: Pos2, center: Pos2, radius: f32) -> Pos2 {
     }
 }
 
+/// Contacts that would draw over one another become one blip carrying their
+/// count, so a pair a few pixels apart still reads as two aircraft rather than
+/// one fat dot.
+fn group_contacts(points: &[Pos2], apart: f32) -> Vec<(Pos2, u32)> {
+    let mut groups: Vec<(Pos2, u32)> = Vec::new();
+    for &p in points {
+        if let Some((_, count)) = groups.iter_mut().find(|(q, _)| q.distance(p) <= apart) {
+            *count += 1;
+        } else {
+            groups.push((p, 1));
+        }
+    }
+    groups
+}
+
+/// How a combat-zone circle falls on the map disc.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ZoneView {
+    /// The boundary crosses the disc: draw the real circle.
+    Boundary,
+    /// The whole disc is inside the zone, and its edge is off the map.
+    Inside,
+    /// The whole zone lies beyond the map.
+    Outside,
+    /// Too small to read at this zoom.
+    Hidden,
+}
+
+fn zone_view(at: Pos2, rp: f32, center: Pos2, radius: f32) -> ZoneView {
+    if rp < 2.0 {
+        return ZoneView::Hidden;
+    }
+    let d = at.distance(center);
+    if rp > d + radius {
+        ZoneView::Inside
+    } else if d > rp + radius {
+        ZoneView::Outside
+    } else {
+        ZoneView::Boundary
+    }
+}
+
+/// The largest zoom at which a zone of `radius` metres fits inside a map disc
+/// of `disc` pixels. Zooming out is the caller's job; this only says how far.
+fn fit_zoom(radius: f64, lat: f64, disc: f32) -> u8 {
+    let target = (disc as f64 - 10.0).max(2.0);
+    for z in (3..=17u8).rev() {
+        let n = (1u32 << z) as f64;
+        let mpp = 2.0 * std::f64::consts::PI * geo::R * lat.cos().abs().max(0.02) / (n * 256.0);
+        if radius / mpp <= target {
+            return z;
+        }
+    }
+    3
+}
+
 fn distance_label(meters: f64, lang: crate::i18n::Lang) -> String {
     let text = if meters >= 1000.0 { format!("{:.1} km", meters / 1000.0) } else { format!("{meters:.0} m") };
     if lang == crate::i18n::Lang::Fr { text.replace('.', ",") } else { text }
@@ -306,7 +365,19 @@ impl Minimap {
 
     pub fn new(prefs: &crate::settings::Settings) -> Self {
         Self { visible: prefs.minimap, landing_guidance: prefs.landing_guidance, heading_up: prefs.minimap_heading_up, zoom: prefs.minimap_zoom,
-            size: Vec2::splat(prefs.minimap_size), bottom: 65.0, top: 0.0, resize_start: 0.0, plan: prefs.minimap_plan, maps: HashMap::new(), map_pending: None, heading: 0.0, scroll: 0.0, tiles: HashMap::new(), pending: None, generation: 0, frame: 0, runway_airports: Vec::new(), runway_center: None }
+            size: Vec2::splat(prefs.minimap_size), bottom: 65.0, top: 0.0, zone_fit: None, resize_start: 0.0, plan: prefs.minimap_plan, maps: HashMap::new(), map_pending: None, heading: 0.0, scroll: 0.0, tiles: HashMap::new(), pending: None, generation: 0, frame: 0, runway_airports: Vec::new(), runway_center: None }
+    }
+
+    /// Frame a combat zone on the next draw: if the current zoom does not show
+    /// its boundary, zoom out just enough to fit it. A map already zoomed out
+    /// past it is left alone.
+    pub fn frame_zone(&mut self, radius: f64) {
+        self.zone_fit = Some(radius);
+    }
+
+    /// Drop a pending zone framing (leaving the dogfight).
+    pub fn cancel_zone_fit(&mut self) {
+        self.zone_fit = None;
     }
 
     fn poll(&mut self, ctx: &egui::Context, generation: u32) {
@@ -362,6 +433,12 @@ impl Minimap {
         let reserved_width = if info_open { 426.0 } else { 44.0 };
         let limit = (ctx.content_rect().width() - reserved_width).min(ctx.content_rect().bottom() - self.bottom - 44.0 - self.top - 8.0).clamp(120.0, 640.0);
         let diameter = self.size.x.clamp(240.0, 640.0).min(limit);
+        if let Some(radius) = self.zone_fit.take() {
+            let fit = fit_zoom(radius, lat, diameter * 0.5);
+            if fit < self.zoom {
+                self.zoom = fit;
+            }
+        }
         egui::Area::new(egui::Id::unique("minimap")).anchor(egui::Align2::LEFT_BOTTOM, [14.0, -self.bottom]).show(ctx, |ui| {
             ui.set_width(diameter);
             ui.vertical_centered(|ui| {
@@ -444,24 +521,57 @@ impl Minimap {
                     let map_drawn = self.draw_map(ctx, src, &painter, rect, cx, cy, n, angle);
                     if self.plan { drawn = map_drawn; }
                     self.draw_runways(world, &painter, rect, lat, lon, cx, cy, n, angle);
-                    // The combat zone: a red circle on the map the fight must stay in.
+                    // The combat zone: a red circle on the map the fight must
+                    // stay in. At the usual zoom it is much larger than the
+                    // disc, so when its boundary is off the map the map scales
+                    // itself once and, if the player zooms back in, marks the
+                    // rim: the whole visible area is inside the zone.
                     if let Some((zlat, zlon, zr)) = zone {
                         let at = map_point(zlat, zlon, cx, cy, n, angle, rect.center());
-                        let mpp = 2.0 * std::f64::consts::PI * geo::R * zlat.cos() / (n * 256.0);
+                        let mpp = 2.0 * std::f64::consts::PI * geo::R * zlat.cos().abs().max(0.02) / (n * 256.0);
                         let rp = (zr / mpp) as f32;
-                        if rp >= 2.0 {
-                            painter.circle_filled(at, rp, Color32::from_rgba_unmultiplied(255, 60, 45, 18));
-                            painter.circle_stroke(at, rp, Stroke::new(1.8, Color32::from_rgb(255, 80, 60)));
+                        let red = Color32::from_rgb(255, 80, 60);
+                        match zone_view(at, rp, rect.center(), radius) {
+                            ZoneView::Boundary => {
+                                painter.circle_filled(at, rp, Color32::from_rgba_unmultiplied(255, 60, 45, 26));
+                                painter.circle_stroke(at, rp, Stroke::new(1.8, red));
+                            }
+                            ZoneView::Inside => {
+                                painter.circle_filled(rect.center(), radius, Color32::from_rgba_unmultiplied(255, 60, 45, 14));
+                                painter.circle_stroke(rect.center(), radius - 6.0, Stroke::new(2.5, red));
+                            }
+                            ZoneView::Outside => {
+                                // The zone is beyond the map: a red arc on the
+                                // rim points toward it.
+                                let off = at - rect.center();
+                                let bearing = if off.length_sq() > 0.0 { off.y.atan2(off.x) } else { 0.0 };
+                                let arc: Vec<Pos2> = (0..=16).map(|k| {
+                                    let a = bearing - 0.20 + 0.40 * k as f32 / 16.0;
+                                    rect.center() + Vec2::new(a.cos(), a.sin()) * (radius - 6.0)
+                                }).collect();
+                                painter.add(egui::Shape::line(arc, Stroke::new(3.0, red)));
+                            }
+                            ZoneView::Hidden => {}
                         }
                     }
                     // The bandits in the fight: a red blip each. One beyond the
                     // map's edge is pinned to the rim in its direction, so a
                     // bandit the map cannot reach still shows where it is.
-                    for &(blat, blon) in contacts {
+                    // Blips that would overlap carry a count instead.
+                    let blips: Vec<Pos2> = contacts.iter().map(|&(blat, blon)| {
                         let at = map_point(blat, blon, cx, cy, n, angle, rect.center());
-                        let dot = blip_point(at, rect.center(), radius - 7.0);
-                        painter.circle_filled(dot, 5.0, Color32::from_rgb(255, 45, 35));
-                        painter.circle_stroke(dot, 5.0, Stroke::new(1.5, Color32::BLACK));
+                        blip_point(at, rect.center(), radius - 7.0)
+                    }).collect();
+                    for (dot, count) in group_contacts(&blips, 13.0) {
+                        let red = Color32::from_rgb(255, 45, 35);
+                        if count == 1 {
+                            painter.circle_filled(dot, 5.0, red);
+                            painter.circle_stroke(dot, 5.0, Stroke::new(1.5, Color32::BLACK));
+                        } else {
+                            painter.circle_filled(dot, 8.0, red);
+                            painter.circle_stroke(dot, 8.0, Stroke::new(1.5, Color32::BLACK));
+                            painter.text(dot, egui::Align2::CENTER_CENTER, count.to_string(), egui::FontId::proportional(9.5), Color32::WHITE);
+                        }
                     }
                     if let Some(guide) = guide { guide.draw_map(&painter, rect, cx, cy, n, angle); }
                 }
@@ -551,6 +661,42 @@ mod tests {
         assert!((far.distance(center) - 60.0).abs() < 1e-4, "the contact was not pinned to the rim");
         assert!((far.y - 100.0).abs() < 1e-4, "the rim contact left its bearing");
         assert_eq!(blip_point(center, center, 60.0), center);
+    }
+    #[test]
+    fn bandits_a_few_pixels_apart_show_as_one_blip_with_their_count() {
+        let a = Pos2::new(100.0, 100.0);
+        let b = Pos2::new(104.0, 100.0);
+        let c = Pos2::new(140.0, 100.0);
+        let groups = group_contacts(&[a, b, c], 13.0);
+        assert_eq!(groups.len(), 2, "the close contacts were not grouped");
+        assert_eq!(groups[0], (a, 2));
+        assert_eq!(groups[1], (c, 1));
+    }
+    #[test]
+    fn a_zone_wider_than_the_map_marks_the_rim_instead_of_vanishing() {
+        let center = Pos2::new(100.0, 100.0);
+        // Centred on the aircraft, the edge is far beyond the disc.
+        assert_eq!(zone_view(center, 300.0, center, 140.0), ZoneView::Inside);
+        // Near the edge, the boundary crosses the disc.
+        assert_eq!(zone_view(Pos2::new(240.0, 100.0), 120.0, center, 140.0), ZoneView::Boundary);
+        assert_eq!(zone_view(center, 100.0, center, 140.0), ZoneView::Boundary);
+        // A small zone beyond the map is off the disc entirely.
+        assert_eq!(zone_view(Pos2::new(600.0, 100.0), 50.0, center, 140.0), ZoneView::Outside);
+        // Nothing readable at a pixel across.
+        assert_eq!(zone_view(center, 1.0, center, 140.0), ZoneView::Hidden);
+    }
+    #[test]
+    fn the_map_zooms_out_to_fit_the_default_zone() {
+        let lat = 50.0_f64.to_radians();
+        let disc = 140.0_f32;
+        let target = (disc - 10.0) as f64;
+        let z = fit_zoom(20_000.0, lat, disc);
+        let mpp = |z: u8| {
+            let n = (1u32 << z) as f64;
+            2.0 * std::f64::consts::PI * geo::R * lat.cos() / (n * 256.0)
+        };
+        assert!(20_000.0 / mpp(z) <= target, "the default zone did not fit at zoom {z}");
+        assert!(z == 17 || 20_000.0 / mpp(z + 1) > target, "zoom {z} was not the closest fit");
     }
     #[test]
     fn a_contact_over_the_aircraft_sits_at_the_centre() {

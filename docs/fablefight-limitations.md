@@ -198,7 +198,9 @@ photograph. Nothing about the scheme is claimed to be historical.
   point. Its radius (**3–60 km**, default 20 km) and the number of bandits in
   the air at once (**1–4**, default 2) are chosen on the start screen. The same
   circle is drawn in red on the globe before starting and on the in-flight
-  minimap.
+  minimap. Entering the fight zooms the map out once so the whole zone fits;
+  if the pilot zooms back in past its edge, the map marks the rim in red
+  instead of dropping the circle off-screen.
 - The boundary is a horizontal circle: altitude does not count, so climbing
   does not take an aircraft out of the fight.
 - Bandits turn back for the centre at **80%** of the radius and do not resume
@@ -271,7 +273,7 @@ the criteria that were actually verified.
 | Cannon rounds are real projectiles with visible tracers; hits remove structure and can tear parts off | **Unverified**: the projectile, swept-hit, ammunition and structural-damage tests pass, but the tracer visuals were not checked in the simulator. |
 | A missile blast near the player does real structural damage; a fatal blast crashes the aircraft | **Fail / unverified**: no missile is ever aimed at the player (AI aircraft carry no missiles), and `main.rs` handles a nearby `weapons::Event::Blast` by shaking the airframe only; it does not call `Plane::blast` on the player. The fatal-blast crash path was therefore not exercised. |
 | A mid-air collision destroys both aircraft and reports `MID-AIR` | **Pass**: `arena::tests::kills_and_deaths_accumulate_independently_and_a_collision_counts_both` and the arena integration test. |
-| Waves reach the configured number of simultaneous bandits (two by default; one to four on the start screen); respawn is 8 s with full stores; kills and deaths are tallied | **Pass**: `arena::tests::waves_never_put_more_than_two_bandits_in_the_air`, `arena::tests::the_enemy_count_caps_the_aircraft_in_the_air`, `a_death_arms_exactly_eight_seconds_and_the_respawn_rearms_the_aircraft` and `tests/arena_loop.rs`. |
+| Every wave puts up the configured number of simultaneous bandits (two by default; one to four on the start screen); respawn is 8 s with full stores; kills and deaths are tallied | **Pass**: `arena::tests::every_wave_puts_up_the_configured_two_bandits`, `arena::tests::the_enemy_count_caps_the_aircraft_in_the_air`, `a_death_arms_exactly_eight_seconds_and_the_respawn_rearms_the_aircraft` and `tests/arena_loop.rs`. |
 | The dogfight stays inside a configurable circular combat zone; the player outside it for more than a minute is damaged and then destroyed | **Partly verified**: the arena clamps spawns (`a_small_zone_clamps_the_spawn_inside_its_edge`), bandits turn back (`bandits::tests::a_bandit_turns_back_at_the_combat_zone_edge`), and the grace/damage curve is tested (`arena::tests::a_minute_outside_is_harmless_then_the_hull_fails`); the HUD warning and a flown exit were not checked. |
 | Nothing in the arena can target live ADS-B or airport traffic | **Pass**: `weapons::tests::dogfight_mode_leaves_live_and_airport_traffic_unshootable`. |
 | `docs/fablefight-limitations.md` lists every deliberate approximation | **Pass**: this document, updated in this phase. |
