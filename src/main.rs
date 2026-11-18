@@ -6740,7 +6740,12 @@ impl Game {
                 if self.minimap.visible {
                     let horizontal = f.dot(e).hypot(f.dot(n));
                     let zone = if self.dogfight { self.arena.zone().map(|z| { let (zl, zo, _) = geo::pos_to_lla(z.centre); (zl, zo, z.radius) }) } else { None };
-                    self.minimap.show(ctx, &self.src, lat, lon, (horizontal > 1e-5).then_some(hdg.to_radians()), self.info_open, landing_guide.as_ref(), &self.world, zone);
+                    // The bandits in the air, as the map's red blips.
+                    let contacts: Vec<(f64, f64)> = self.bandits.alive().map(|(_, b)| {
+                        let (la, lo, _) = geo::pos_to_lla(b.plane.pos);
+                        (la, lo)
+                    }).collect();
+                    self.minimap.show(ctx, &self.src, lat, lon, (horizontal > 1e-5).then_some(hdg.to_radians()), self.info_open, landing_guide.as_ref(), &self.world, zone, &contacts);
                 } else {
                     egui::Area::new(egui::Id::unique("show_minimap")).anchor(Align2::LEFT_BOTTOM, [14.0, -self.minimap.bottom]).show(ctx, |ui| {
                         if ui.button(t!("Map", "Carte")).on_hover_text(t!("Show the minimap (`)", "Afficher la mini-carte (`)")).clicked() { self.minimap.visible = true; }

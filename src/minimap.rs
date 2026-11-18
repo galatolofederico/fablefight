@@ -150,6 +150,27 @@ fn tile_offset(x: f64, center: f64, n: f64) -> f64 {
     (x - center + n * 0.5).rem_euclid(n) - n * 0.5
 }
 
+/// Where a latitude and longitude (radians) falls on the disc, taking the
+/// nearest copy across the antimeridian and turning it with the map.
+fn map_point(lat: f64, lon: f64, cx: f64, cy: f64, n: f64, angle: f64, center: Pos2) -> Pos2 {
+    let x = geo::lon_to_merc_x(lon).rem_euclid(1.0) * n;
+    let y = geo::lat_to_merc_y(lat) * n;
+    center + rotate(Vec2::new((tile_offset(x, cx, n) * 256.0) as f32, ((y - cy) * 256.0) as f32), angle)
+}
+
+/// Where a contact is drawn: at its point while that is on the disc,
+/// otherwise pinned to the rim in the same direction so it still shows which
+/// way to turn.
+fn blip_point(at: Pos2, center: Pos2, radius: f32) -> Pos2 {
+    let off = at - center;
+    let d = off.length();
+    if d <= radius || d <= 0.0 {
+        at
+    } else {
+        center + off * (radius / d)
+    }
+}
+
 fn distance_label(meters: f64, lang: crate::i18n::Lang) -> String {
     let text = if meters >= 1000.0 { format!("{:.1} km", meters / 1000.0) } else { format!("{meters:.0} m") };
     if lang == crate::i18n::Lang::Fr { text.replace('.', ",") } else { text }
@@ -334,7 +355,7 @@ impl Minimap {
         }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, src: &Arc<Sources>, lat: f64, lon: f64, heading: Option<f64>, info_open: bool, guide: Option<&crate::approach::Guide>, world: &crate::world::World, zone: Option<(f64, f64, f64)>) {
+    pub fn show(&mut self, ctx: &egui::Context, src: &Arc<Sources>, lat: f64, lon: f64, heading: Option<f64>, info_open: bool, guide: Option<&crate::approach::Guide>, world: &crate::world::World, zone: Option<(f64, f64, f64)>, contacts: &[(f64, f64)]) {
         self.frame += 1;
         self.poll(ctx, src.google.generation());
         if let Some(h) = heading { self.heading = h; }
@@ -425,15 +446,22 @@ impl Minimap {
                     self.draw_runways(world, &painter, rect, lat, lon, cx, cy, n, angle);
                     // The combat zone: a red circle on the map the fight must stay in.
                     if let Some((zlat, zlon, zr)) = zone {
-                        let zx = geo::lon_to_merc_x(zlon).rem_euclid(1.0) * n;
-                        let zy = geo::lat_to_merc_y(zlat) * n;
-                        let at = rect.center() + rotate(Vec2::new((tile_offset(zx, cx, n) * 256.0) as f32, ((zy - cy) * 256.0) as f32), angle);
+                        let at = map_point(zlat, zlon, cx, cy, n, angle, rect.center());
                         let mpp = 2.0 * std::f64::consts::PI * geo::R * zlat.cos() / (n * 256.0);
                         let rp = (zr / mpp) as f32;
                         if rp >= 2.0 {
                             painter.circle_filled(at, rp, Color32::from_rgba_unmultiplied(255, 60, 45, 18));
                             painter.circle_stroke(at, rp, Stroke::new(1.8, Color32::from_rgb(255, 80, 60)));
                         }
+                    }
+                    // The bandits in the fight: a red blip each. One beyond the
+                    // map's edge is pinned to the rim in its direction, so a
+                    // bandit the map cannot reach still shows where it is.
+                    for &(blat, blon) in contacts {
+                        let at = map_point(blat, blon, cx, cy, n, angle, rect.center());
+                        let dot = blip_point(at, rect.center(), radius - 7.0);
+                        painter.circle_filled(dot, 5.0, Color32::from_rgb(255, 45, 35));
+                        painter.circle_stroke(dot, 5.0, Stroke::new(1.5, Color32::BLACK));
                     }
                     if let Some(guide) = guide { guide.draw_map(&painter, rect, cx, cy, n, angle); }
                 }
@@ -513,5 +541,27 @@ mod tests {
     fn antimeridian_uses_nearest_copy() {
         assert!((tile_offset(0.0, 255.75, 256.0) - 0.25).abs() < 1e-8);
         assert!((tile_offset(255.0, 0.25, 256.0) + 1.25).abs() < 1e-8);
+    }
+    #[test]
+    fn a_contact_beyond_the_map_is_pinned_to_the_rim() {
+        let center = Pos2::new(100.0, 100.0);
+        let near = Pos2::new(150.0, 100.0);
+        assert_eq!(blip_point(near, center, 60.0), near, "an on-map contact moved");
+        let far = blip_point(Pos2::new(400.0, 100.0), center, 60.0);
+        assert!((far.distance(center) - 60.0).abs() < 1e-4, "the contact was not pinned to the rim");
+        assert!((far.y - 100.0).abs() < 1e-4, "the rim contact left its bearing");
+        assert_eq!(blip_point(center, center, 60.0), center);
+    }
+    #[test]
+    fn a_contact_over_the_aircraft_sits_at_the_centre() {
+        let (lat, lon) = (50.0_f64.to_radians(), 4.0_f64.to_radians());
+        let n = 4096.0;
+        let (cx, cy) = (geo::lon_to_merc_x(lon).rem_euclid(1.0) * n, geo::lat_to_merc_y(lat) * n);
+        let center = Pos2::new(120.0, 140.0);
+        // The player's own position is the centre however the map is turned.
+        for angle in [0.0, -1.0, 2.5] {
+            let p = map_point(lat, lon, cx, cy, n, angle, center);
+            assert!(p.distance(center) < 1e-3, "the contact sat {:.2} px off centre", p.distance(center));
+        }
     }
 }
