@@ -399,6 +399,15 @@ pub fn rearm(spec: &'static Spec, pieces: &[Piece], weapons: &mut Weapons, guns:
     guns.reset(spec);
 }
 
+/// A new wave begins with full stores: every missile station loaded again,
+/// the flare dispenser full and the cannon's belt full. Anything already in
+/// the air keeps flying, unlike [`rearm`]. `main.rs` calls this on
+/// [`Event::Wave`].
+pub fn recharge(weapons: &mut Weapons, guns: &mut Guns) {
+    weapons.recharge();
+    guns.recharge();
+}
+
 /// How many bandits a wave holds: one, then two, then three, and one more for
 /// each extra bandit the caller allows in the air (up to `MAX_BANDITS`). The
 /// waves keep coming; the live cap is the configured enemy count.

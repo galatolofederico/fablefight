@@ -2950,6 +2950,8 @@ impl Game {
                     self.guns.bandit_spawned(i as u32, self.spec);
                 }
                 arena::Event::Wave(n) => {
+                    // Every wave starts with full stores.
+                    arena::recharge(&mut self.weapons, &mut self.guns);
                     self.flash.push((t!("WAVE {}", "VAGUE {}", n).into(), self.real));
                 }
                 arena::Event::Respawn => respawn = true,

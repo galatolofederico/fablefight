@@ -111,6 +111,12 @@ impl Guns {
         self.bandit.clear();
     }
 
+    /// Fill the player's belt again, leaving rounds already in the air alone.
+    /// `main.rs` calls this at each wave through `arena::recharge`.
+    pub fn recharge(&mut self) {
+        self.ammo = self.magazine();
+    }
+
     /// Does the player's type carry a cannon at all?
     pub fn has_gun(&self) -> bool {
         self.gun.is_some()
@@ -385,6 +391,24 @@ mod tests {
         assert_eq!(after, 0, "a dry gun fired");
         assert_eq!(guns.ammo, 0);
         assert!(!guns.fire(Shooter::Player, plane.pos, plane.vel, plane.forward()));
+    }
+
+    #[test]
+    fn recharging_fills_the_belt_and_leaves_rounds_in_the_air() {
+        let mut guns = Guns::new(13);
+        guns.reset(&fa18::SPEC);
+        let mut plane = hornet();
+        let mut bandits = Bandits::new();
+        let h = 1.0 / 180.0;
+        for _ in 0..30 {
+            guns.step(h, true, &mut plane, &mut bandits);
+        }
+        assert!(guns.ammo < guns.magazine(), "the belt did not empty at all");
+        let flying = guns.rounds.len();
+        assert!(flying > 0, "nothing was in the air to keep");
+        guns.recharge();
+        assert_eq!(guns.ammo, guns.magazine(), "the belt is not full");
+        assert_eq!(guns.rounds.len(), flying, "rounds already in the air were cleared");
     }
 
     #[test]

@@ -270,6 +270,19 @@ impl Weapons {
         self.rng = RNG_SEED;
     }
 
+    /// Top up the aircraft's stores as they stand: every station loaded again
+    /// and the flare dispenser full. Missiles and flares already in the air
+    /// keep flying, so a new wave does not wipe them out. `main.rs` calls this
+    /// at each wave through `arena::recharge`.
+    pub fn recharge(&mut self) {
+        for st in &mut self.stations {
+            st.loaded = true;
+        }
+        if !self.stations.is_empty() {
+            self.flares_left = FLARES_MAX;
+        }
+    }
+
     pub fn has_weapons(&self) -> bool {
         !self.stations.is_empty()
     }
@@ -1037,6 +1050,30 @@ mod tests {
         assert!(w.missiles.is_empty());
         // A 500 m crossing shot is inside the documented 600 m minimum.
         assert!(500.0 < MIN_LAUNCH);
+    }
+
+    #[test]
+    fn recharging_tops_up_stores_and_keeps_launched_missiles_flying() {
+        let (mut plane, pieces) = hornet_with_missiles();
+        let mut w = Weapons::new(&crate::aircraft::fa18::SPEC, &pieces);
+        let target = Target {
+            key: TargetKey::Live("TEST123".into()),
+            pos: plane.pos + plane.forward() * 5_000.0,
+            vel: plane.vel,
+            size: 2,
+            label: "TEST123".into(),
+        };
+        assert!(w.cycle_target(&plane, std::slice::from_ref(&target)));
+        w.lock = 1.0;
+        assert!(matches!(w.try_fire(&mut plane, true).as_slice(), [Event::Fired { station: 0 }]));
+        assert!(!w.loaded(0));
+        assert_eq!(w.missiles.len(), 1);
+        w.flares_left = 0;
+        w.recharge();
+        assert!(w.stations.iter().all(|s| s.loaded), "not every station reloaded");
+        assert_eq!(w.flares_left, FLARES_MAX, "the dispenser is not full");
+        assert_eq!(w.missiles.len(), 1, "the missile already in the air was cleared");
+        assert!(!w.hides_piece("left sidewinder"), "the launched missile's piece did not come back");
     }
 
     #[test]
