@@ -40,6 +40,9 @@ fn a_missile_shot_down_a_bandit_and_the_kill_is_recorded() {
     let mut bandits = bandits::Bandits::new();
     let id = bandits.spawn(spec, player.pos + fwd * 4_000.0, fwd, spec.cruise);
     assert_eq!(bandits.alive_count(), 1);
+    // This test is about the missile's kill path, not the bandit's decoy
+    // defence: empty its dispenser so the one shot has to be flown.
+    bandits.items[id].as_mut().unwrap().flares_left = 0;
 
     // The two wingtip missiles, as the model names them.
     let pieces = vec![sidewinder("left sidewinder", -5.9), sidewinder("right sidewinder", 5.9)];
@@ -52,7 +55,7 @@ fn a_missile_shot_down_a_bandit_and_the_kill_is_recorded() {
     let (mut fired, mut killed) = (false, false);
     for _ in 0..(40.0 / dt) as usize {
         player.step(dt, &pilot, &world);
-        bandits.step(dt, &world, &player);
+        bandits.step(dt, &world, &player, &weapons.missiles, &weapons.flares);
         targets.clear();
         bandits.append_targets(&mut targets);
         if targets.is_empty() {
@@ -66,7 +69,7 @@ fn a_missile_shot_down_a_bandit_and_the_kill_is_recorded() {
         if weapons.lock >= 1.0 && !fired {
             weapons.request_fire();
         }
-        for ev in weapons.step(dt, &mut player, &targets, &world, true) {
+        for ev in weapons.step_with_flares(dt, &mut player, &targets, &world, true, &bandits.flares) {
             match ev {
                 weapons::Event::Fired { .. } => fired = true,
                 weapons::Event::Blast { pos, power, target: Some(weapons::TargetKey::Bandit(b)), .. } => {
@@ -116,7 +119,7 @@ fn an_arena_bandit_closes_on_a_straight_flying_player() {
     let mut closest = f64::MAX;
     for _ in 0..(45.0 / h) as usize {
         player.step(h, &controls, &world);
-        bandits.step(h, &world, &player);
+        bandits.step(h, &world, &player, &[], &[]);
         apply(arena.step(h, &mut bandits, &state(&player)), &mut bandits);
         for (_, b) in bandits.alive() {
             closest = closest.min((b.plane.pos - player.pos).length());

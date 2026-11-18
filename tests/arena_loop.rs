@@ -59,7 +59,7 @@ fn a_wave_a_kill_a_death_and_a_respawn() {
     let controls = plane::Controls { throttle: 0.7, ..Default::default() };
     for _ in 0..(2.0 / h) as usize {
         player.step(h, &controls, &world);
-        bandits.step(h, &world, &player);
+        bandits.step(h, &world, &player, &[], &[]);
         respawns += apply(arena.step(h, &mut bandits, &player_state(&player)), &mut bandits, &mut guns) as u32;
     }
     assert_eq!(bandits.alive_count(), 2, "more than the configured number joined wave one");
@@ -92,7 +92,7 @@ fn a_wave_a_kill_a_death_and_a_respawn() {
     // While the player is down the bandits keep flying.
     let before = bandits.alive().next().map(|(_, b)| b.plane.pos);
     for _ in 0..(arena::RESPAWN_DELAY / h) as usize + 4 {
-        bandits.step(h, &world, &player);
+        bandits.step(h, &world, &player, &[], &[]);
         respawns += apply(arena.step(h, &mut bandits, &dead), &mut bandits, &mut guns) as u32;
     }
     assert_eq!(respawns, 1, "the player did not come back exactly once");

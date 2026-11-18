@@ -3009,6 +3009,8 @@ impl Game {
         let (e, n, _) = geo::enu(self.plane.pos);
         let hd = self.plane.forward().dot(e).atan2(self.plane.forward().dot(n));
         self.respawn_at(lat, lon, g + DOGFIGHT_AGL, hd, self.spec.cruise);
+        // A missile still hunting the wreck must not follow the replacement.
+        self.bandits.clear_ordnance();
         self.status = t!("Respawned: bandits still up", "Réapparu : bandits en vol").into();
         self.status_until = self.real + 4.0;
     }
@@ -3198,24 +3200,16 @@ impl Game {
                 }));
             }
             weapons::Event::Blast { pos, power, size, target } => {
-                let near = 1.0 / (1.0 + ((self.cam_pos - pos).length() as f32 / 500.0).powi(2));
-                if let Some(a) = &self.audio {
-                    a.boom(power * (0.2 + 0.8 * near));
-                }
-                // The flash lights the aircraft for a moment and, if the hit
-                // is close, gives the airframe a jolt.
-                self.weapon_flash = Some((pos, power, self.real));
-                if (self.cam_pos - pos).length() < 800.0 {
-                    self.plane.dmg.vibe = self.plane.dmg.vibe.max(power * 1.5);
-                }
-                self.anchor_fx(pos);
-                self.blast_fx(pos, power, size, femit);
+                self.detonation_fx(pos, power, size, femit);
                 if let Some(key) = target {
                     let label = self.weapons.target_view.as_ref().map(|v| v.label.clone()).unwrap_or_default();
                     let hit = match &key {
                         weapons::TargetKey::Live(hex) => self.live.down(hex),
                         weapons::TargetKey::Airport { .. } => self.world.down_air_target(&key),
                         weapons::TargetKey::Bandit(i) => self.bandits.hit(*i, pos, power, bandits::KillBy::Missile),
+                        // The player's own seeker never picks the player; a
+                        // hostile missile's hit is handled by `bandit_event`.
+                        weapons::TargetKey::Player => false,
                     };
                     if hit {
                         let msg = if label.is_empty() { t!("SPLASH", "ABATTU").to_string() } else { t!("SPLASH  {}", "ABATTU  {}", label) };
@@ -3228,6 +3222,67 @@ impl Game {
                 }
             }
         }
+    }
+
+    /// A bandit's launch, flare or detonation. Hostile missiles are flown by
+    /// `Bandits`; this turns their events into the same sight and sound as the
+    /// player's weapons, and applies a warhead that fused on the player.
+    fn bandit_event(&mut self, ev: bandits::Event, femit: &mut Vec<(DVec3, render::Particle)>) {
+        match ev {
+            bandits::Event::MissileLaunch { owner, pos } => {
+                let d = pos - self.cam_pos;
+                let near = (1.0 / (1.0 + (d.length() as f32 / 700.0).powi(2))).clamp(0.12, 1.0);
+                if let Some(a) = &self.audio {
+                    a.event(audio::Event::Missile(near));
+                }
+                // Only shout about a launch the player could realistically
+                // notice; the RWR keeps warning while it guides.
+                if !self.crashed && (pos - self.plane.pos).length() < 14_000.0 {
+                    let label = self.bandits.get(owner).map(|b| b.label.clone()).unwrap_or_default();
+                    self.flash.push((t!("MISSILE AWAY  {}", "MISSILE LANCÉ  {}", label), self.real));
+                }
+            }
+            bandits::Event::Flare { pos, .. } => {
+                if let Some(a) = &self.audio {
+                    let d = pos - self.cam_pos;
+                    let near = 1.0 / (1.0 + (d.length() as f32 / 120.0).powi(2));
+                    let pan = if d.length() > 1.0 { d.normalize().dot(self.plane.right()) as f32 } else { 0.0 };
+                    a.event(audio::Event::Flare { near: 0.2 + 0.8 * near, pan });
+                }
+            }
+            bandits::Event::Blast { pos, power, size, hit_player, .. } => {
+                self.detonation_fx(pos, power, size, femit);
+                if hit_player && !self.crashed && !self.plane.wrecked() {
+                    // The warhead's blast is injected into the airframe at the
+                    // body-frame point where the fuse fired.
+                    let body = self.plane.rot.inverse() * (pos - self.plane.model_pos());
+                    self.plane.blast(body.as_vec3(), power);
+                    if self.plane.wrecked() && self.player_kill.is_none() {
+                        self.player_kill = Some(bandits::KillBy::Missile);
+                    }
+                    if !self.dogfight && self.plane.wrecked() {
+                        self.flash.push((t!("MISSILE HIT", "MISSILE AU BUT").into(), self.real));
+                    }
+                }
+            }
+        }
+    }
+
+    /// The flash, sound and camera jolt of a detonation, shared by both sides'
+    /// warheads.
+    fn detonation_fx(&mut self, pos: DVec3, power: f32, size: f32, femit: &mut Vec<(DVec3, render::Particle)>) {
+        let near = 1.0 / (1.0 + ((self.cam_pos - pos).length() as f32 / 500.0).powi(2));
+        if let Some(a) = &self.audio {
+            a.boom(power * (0.2 + 0.8 * near));
+        }
+        // The flash lights the aircraft for a moment and, if the hit is close,
+        // gives the airframe a jolt.
+        self.weapon_flash = Some((pos, power, self.real));
+        if (self.cam_pos - pos).length() < 800.0 {
+            self.plane.dmg.vibe = self.plane.dmg.vibe.max(power * 1.5);
+        }
+        self.anchor_fx(pos);
+        self.blast_fx(pos, power, size, femit);
     }
 
     /// The fireball and smoke of a missile going off (or a target being hit).
@@ -3456,9 +3511,10 @@ impl Game {
         let live = !self.crashed && !in_menu && dt > 0.0;
         if live {
             self.warn.seeker = self.weapons.seeker_tone;
-            // RWR: any bandit whose radar is painting the player. No AI
-            // aircraft carries a missile yet, so the launch warning stays off.
+            // RWR: any bandit whose radar is painting the player.
             self.warn.rwr = self.bandits.alive().filter(|(_, b)| b.ai.target_seen).count().min(3) as f32 / 3.0;
+            // Launch warning: a bandit missile still guiding on this aircraft.
+            self.warn.launch = self.bandits.incoming_on_player(&self.plane).is_some();
         }
         let p = &self.plane;
         let up = p.pos.normalize();
@@ -3784,7 +3840,7 @@ impl Game {
                 let imp = self.plane.step(h, &c, &self.world);
                 let player_now = self.plane.model_pos() + self.plane.rot * sphere.as_dvec3();
                 if imp.is_none() {
-                    self.bandits.step(h, &self.world, &self.plane);
+                    self.bandits.step(h, &self.world, &self.plane, &self.weapons.missiles, &self.weapons.flares);
                     // Both aircraft swept from where they were to where they
                     // are: a point test misses a fast head-on pass.
                     if let Some(i) = self.bandits.swept_collision(player_prev, player_now, sphere_r as f64) {
@@ -3820,8 +3876,11 @@ impl Game {
                 for ev in self.guns.step(h, cannon && powered, &mut self.plane, &mut self.bandits) {
                     self.gun_event(ev, &mut femit);
                 }
-                for ev in self.weapons.step(h, &mut self.plane, &weapon_targets, &self.world, powered) {
+                for ev in self.weapons.step_with_flares(h, &mut self.plane, &weapon_targets, &self.world, powered, &self.bandits.flares) {
                     self.weapon_event(ev, &mut femit);
+                }
+                for ev in std::mem::take(&mut self.bandits.events) {
+                    self.bandit_event(ev, &mut femit);
                 }
                 // The arena's own clock: credits from this step's kills, the
                 // player's death, the next wave and the respawn timer.
@@ -3981,7 +4040,10 @@ impl Game {
             let h = 1.0 / 180.0;
             while self.acc >= h {
                 self.acc -= h;
-                self.bandits.step(h, &self.world, &self.plane);
+                self.bandits.step(h, &self.world, &self.plane, &self.weapons.missiles, &self.weapons.flares);
+                for ev in std::mem::take(&mut self.bandits.events) {
+                    self.bandit_event(ev, &mut femit);
+                }
                 if !self.bandits.deaths.is_empty() {
                     let deaths: Vec<_> = self.bandits.deaths.drain(..).collect();
                     for (at, power) in deaths {
@@ -4121,9 +4183,14 @@ impl Game {
             self.r.emit(&emit);
         }
         // Missiles leave a trail of smoke (and a little flame on the boost).
-        if !in_menu && !self.weapons.missiles.is_empty() {
+        if !in_menu && (!self.weapons.missiles.is_empty() || !self.bandits.missiles.is_empty()) {
             let mut trail = Vec::new();
-            for m in &self.weapons.missiles {
+            let shots = self
+                .weapons
+                .missiles
+                .iter()
+                .chain(self.bandits.missiles.iter().map(|bm| &bm.missile));
+            for m in shots {
                 let pos = (m.pos - self.fx_anchor).as_vec3();
                 let back = (m.rot * DVec3::Z).as_vec3();
                 let n = if m.burn > 0.0 { 2 } else { 1 };
@@ -4147,6 +4214,48 @@ impl Game {
                 }
             }
             self.r.emit(&trail);
+        }
+        // Burning flares, both sides': a hot point with a short smoky tail.
+        if !in_menu && (!self.weapons.flares.is_empty() || !self.bandits.flares.is_empty()) {
+            let mut glow = Vec::new();
+            let flares = self.weapons.flares.iter().chain(self.bandits.flares.iter());
+            for f in flares {
+                // A flare on the far side of the fight is not worth a
+                // particle; the visual budget belongs to the ones in view.
+                if (f.pos - self.cam_pos).length() > 8_000.0 {
+                    continue;
+                }
+                let r = &mut self.rng;
+                glow.push(render::Particle {
+                    pos: (f.pos - self.fx_anchor).as_vec3().into(),
+                    vel: (f.vel * 0.1).as_vec3().into(),
+                    life: 0.09,
+                    size0: 1.5,
+                    size1: 0.8,
+                    temp: 3.0,
+                    kind: crash::FLASH,
+                    drag: 0.0,
+                    seed: r.f(),
+                    alpha: 2.2,
+                    ..Default::default()
+                });
+                if r.f() < 0.35 {
+                    glow.push(render::Particle {
+                        pos: (f.pos - self.fx_anchor).as_vec3().into(),
+                        vel: (-f.vel * 0.25 + r.dir().as_dvec3() * 1.5).as_vec3().into(),
+                        life: r.range(0.5, 1.1),
+                        size0: 0.35,
+                        size1: r.range(1.2, 2.4),
+                        kind: crash::MIST,
+                        drag: 1.4,
+                        buoy: 0.8,
+                        seed: r.f(),
+                        alpha: 0.35,
+                        ..Default::default()
+                    });
+                }
+            }
+            self.r.emit(&glow);
         }
         // Cannon tracers: a bright dash at every live round, so a burst reads
         // as a stream from the muzzle to whatever it hits.
@@ -4700,8 +4809,15 @@ impl Game {
                     });
                 }
             }
-            // Missiles in flight: the same wingtip piece, now on its own.
-            for m in &self.weapons.missiles {
+            // Missiles in flight: the same wingtip piece, now on its own. A
+            // bandit in the arena flies the player's type, so its shots use
+            // the same station model pieces.
+            let shots = self
+                .weapons
+                .missiles
+                .iter()
+                .chain(self.bandits.missiles.iter().map(|bm| &bm.missile));
+            for m in shots {
                 let Some(st) = self.weapons.station(m.station) else { continue };
                 let Some(pi) = st.piece else { continue };
                 let local = self.model.pieces[pi].pivot.as_dvec3();
@@ -4735,7 +4851,7 @@ impl Game {
                         airframe::Vis::FastProp => blur <= 0.0,
                         airframe::Vis::Chute => b.plane.spoilers < 0.02,
                     };
-                    if hide || dm.hidden(p) {
+                    if hide || dm.hidden(p) || b.hides_piece(p.name) {
                         continue;
                     }
                     let tears = dm.tears_for(p);
@@ -6625,6 +6741,9 @@ impl Game {
             let amber = Color32::from_rgb(255, 180, 50);
             if !self.crashed && self.show_hud {
                 let w = &self.warn;
+                if w.launch {
+                    warn.push((t!("MISSILE INBOUND", "MISSILE EN APPROCHE"), red));
+                }
                 if w.pull_up {
                     warn.push(("PULL UP", red));
                 } else if w.dive > 0.0 {

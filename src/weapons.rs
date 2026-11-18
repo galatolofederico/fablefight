@@ -2,12 +2,17 @@
 //!
 //! The player's weapon system lives here: master arm, the seeker and its
 //! lock, the six stations on the three fighters, the missiles themselves once
-//! they have left the rails, and the flare dispenser. The flight model and the
+//! they have left the rails, and the flare dispenser. The same missile and
+//! flare bodies are flown by the bandits (`bandits.rs` reuses `Missile::step`,
+//! `eject_flare` and `seduce_missiles`), so an enemy missile obeys the same
+//! motor, drag, gimbal and proximity-fuse rules as the player's and either
+//! side's flares can seduce either side's seeker. The flight model and the
 //! rest of the aircraft know nothing about them; `main.rs` feeds in the target
 //! list each fixed step and turns the events into sound, particles and damage.
 //! Targets are live ADS-B aircraft, airport traffic, or the AI bandits
 //! (`TargetKey::Bandit`). In dogfight mode (`Weapons::dogfight`) only the AI
-//! aircraft can be locked: the traffic stays in the world as ambience.
+//! aircraft can be locked: the traffic stays in the world as ambience. A
+//! hostile missile's target is the player, `TargetKey::Player`.
 //!
 //! A missile is a simple boost-and-coast body: it leaves its station with the
 //! aircraft's velocity, burns for a couple of seconds, then drags down while
@@ -67,9 +72,10 @@ const G0: f64 = 9.80665;
 /// The dispenser: flares carried, released per press, and how long each burns
 /// (s). The F-4E's two AN/ALE-40s carry 30 flares between them; the game gives
 /// the same 30 to every fighter (see docs/fablefight-limitations.md).
-const FLARES_MAX: u32 = 30;
-const FLARE_SALVO: u32 = 2;
-const FLARE_LIFE: f64 = 4.5;
+pub(crate) const FLARES_MAX: u32 = 30;
+pub(crate) const FLARE_SALVO: u32 = 2;
+/// How long each flare burns (s). Shared with the bandits' dispensers.
+pub(crate) const FLARE_LIFE: f64 = 4.5;
 /// How near the target (m) a flare must be, how far a missile's seeker can be
 /// fooled by one (m), the most chance per step at point-blank dead astern,
 /// and the fuse radius on a seduced flare (m).
@@ -88,6 +94,9 @@ pub enum TargetKey {
     Airport { apt: u32, mover: u32 },
     /// An AI aircraft, by its stable slot in `bandits::Bandits` (never reused).
     Bandit(u32),
+    /// The player's aircraft. Only a bandit's missile targets this key; the
+    /// player's own seeker never does.
+    Player,
 }
 
 /// One target a seeker may lock onto.
@@ -328,8 +337,10 @@ impl Weapons {
             .any(|s| s.piece.is_some() && s.spec.piece == name && !s.loaded)
     }
 
-    /// Fly the seeker, the flares and every missile on.  `dt` is the fixed
-    /// physics step; `powered` is the aircraft's electrical bus.
+    /// Fly the seeker, the flares and every missile on, without any other
+    /// aircraft's flares in the sky. `main.rs` uses [`Weapons::step_with_flares`]
+    /// in play; this is the no-flares entry point the unit tests use.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn step(
         &mut self,
         dt: f64,
@@ -337,6 +348,21 @@ impl Weapons {
         targets: &[Target],
         world: &World,
         powered: bool,
+    ) -> Vec<Event> {
+        self.step_with_flares(dt, plane, targets, world, powered, &[])
+    }
+
+    /// As [`Weapons::step`], with the bandits' burning flares added to the
+    /// decoy picture: a wingman's (or an opponent's) flare near the target's
+    /// tail can fool the player's seeker exactly as one of the player's own.
+    pub fn step_with_flares(
+        &mut self,
+        dt: f64,
+        plane: &mut crate::plane::Plane,
+        targets: &[Target],
+        world: &World,
+        powered: bool,
+        external_flares: &[Flare],
     ) -> Vec<Event> {
         let mut events = Vec::new();
         // In dogfight mode a target list may still hold the traffic the world
@@ -420,9 +446,17 @@ impl Weapons {
             events.extend(self.try_fire(plane, powered));
         }
 
-        self.seduce(targets);
+        // Both sides' flares are in the sky; a seeker does not know which
+        // dispenser one came from, only how near the target's exhaust it is.
+        let flares: Vec<Flare> = self
+            .flares
+            .iter()
+            .chain(external_flares.iter())
+            .cloned()
+            .collect();
+        seduce_missiles(&mut self.missiles, &flares, targets, &mut self.rng);
         for m in &mut self.missiles {
-            m.step(dt, targets, &self.flares, world, &mut events);
+            m.step(dt, targets, &flares, world, &mut events);
         }
         self.missiles.retain(|m| m.alive);
 
@@ -449,63 +483,35 @@ impl Weapons {
         for _ in 0..n {
             // Left and right dispensers alternate, as the real ones would.
             let side = if self.next_flare % 2 == 0 { -1.0 } else { 1.0 };
-            let pos = plane.model_pos() + plane.rot * DVec3::new(side * 0.35, -0.55, 1.6);
-            let vel = plane.vel + plane.rot * DVec3::new(side * 6.0, -5.0, 16.0);
-            self.flares.push(Flare { id: self.next_flare, pos, vel, age: 0.0, life: FLARE_LIFE });
+            let f = eject_flare(plane, self.next_flare, side);
+            events.push(Event::Flare { pos: f.pos, vel: f.vel });
+            self.flares.push(f);
             self.next_flare += 1;
             self.flares_left -= 1;
-            events.push(Event::Flare { pos, vel });
         }
         events
     }
 
     /// Let the burning flares fall behind and burn out.
     fn drift_flares(&mut self, dt: f64) {
-        for f in &mut self.flares {
-            f.age += dt;
-            f.vel -= f.pos.normalize_or_zero() * G0 * dt;
-            // A flare is a bluff body: it slows quickly against the air.
-            f.vel *= (1.0 - 0.35 * dt).max(0.0);
-            f.pos += f.vel * dt;
-        }
-        self.flares.retain(|f| f.age < f.life);
+        drift_flares(&mut self.flares, dt);
     }
 
     /// Roll each missile's seeker against every flare: close behind the
     /// target's tail is what fools it, and farther away is less and less
-    /// likely.
+    /// likely. Kept for the flare unit test; the live step uses the free
+    /// [`seduce_missiles`] so bandit missiles use the same dice.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn seduce(&mut self, targets: &[Target]) {
-        if self.flares.is_empty() || self.missiles.is_empty() {
-            return;
-        }
-        let flares: Vec<(u64, DVec3)> = self.flares.iter().map(|f| (f.id, f.pos)).collect();
-        let mut rng = self.rng;
-        for m in &mut self.missiles {
-            if m.decoy.is_some() {
-                continue;
-            }
-            let Some(t) = m.target.as_ref().and_then(|k| targets.iter().find(|t| &t.key == k)) else {
-                continue;
-            };
-            let range = (t.pos - m.pos).length();
-            for &(id, pos) in &flares {
-                let near = 1.0 - ((pos - t.pos).length() / FLARE_NEAR).clamp(0.0, 1.0);
-                let chance = decoy_chance(range, behind_factor(t, pos)) * near;
-                if chance > 0.0 && next_random(&mut rng) < chance {
-                    m.decoy = Some(id);
-                    m.target = None;
-                    break;
-                }
-            }
-        }
-        self.rng = rng;
+        seduce_missiles(&mut self.missiles, &self.flares, targets, &mut self.rng);
     }
 
     /// Lock range for a target (m): its size class sets the nominal range, and
     /// its aspect at the seeker scales it (see `aspect_factor`). `aspect` is
     /// the angle at the target between its nose and the line back to us: 0
-    /// head-on, PI dead astern.
-    fn lock_range(size: u8, aspect: f64) -> f64 {
+    /// head-on, PI dead astern. Public because the AI uses the same seeker
+    /// envelope when it decides whether a missile shot is worth taking.
+    pub fn lock_range(size: u8, aspect: f64) -> f64 {
         (LOCK_BASE + LOCK_SIZE * size.min(4) as f64) * aspect_factor(aspect)
     }
 
@@ -621,17 +627,7 @@ impl Weapons {
         let rot = plane.rot;
         let target = self.target.clone();
         let mass = st.spec.mass as f64;
-        self.missiles.push(Missile {
-            station: i,
-            pos,
-            vel,
-            rot,
-            age: 0.0,
-            burn: 0.0,
-            target,
-            decoy: None,
-            alive: true,
-        });
+        self.missiles.push(Missile::launch(i, pos, vel, rot, target));
         self.stations[i].loaded = false;
         // The empty launcher stays on the aircraft; only the missile's mass goes.
         plane.stores = (plane.stores - mass).max(0.0);
@@ -680,8 +676,81 @@ fn next_random(state: &mut u64) -> f64 {
     (*state >> 11) as f64 / (1u64 << 53) as f64
 }
 
+/// One flare out of a dispenser: backwards, down and to one side, carrying the
+/// aircraft's velocity. Both the player's and the bandits' dispensers use it.
+pub(crate) fn eject_flare(plane: &crate::plane::Plane, id: u64, side: f64) -> Flare {
+    let pos = plane.model_pos() + plane.rot * DVec3::new(side * 0.35, -0.55, 1.6);
+    let vel = plane.vel + plane.rot * DVec3::new(side * 6.0, -5.0, 16.0);
+    Flare { id, pos, vel, age: 0.0, life: FLARE_LIFE }
+}
+
+/// Let burning flares fall behind and burn out.
+pub(crate) fn drift_flares(flares: &mut Vec<Flare>, dt: f64) {
+    for f in flares.iter_mut() {
+        f.age += dt;
+        f.vel -= f.pos.normalize_or_zero() * G0 * dt;
+        // A flare is a bluff body: it slows quickly against the air.
+        f.vel *= (1.0 - 0.35 * dt).max(0.0);
+        f.pos += f.vel * dt;
+    }
+    flares.retain(|f| f.age < f.life);
+}
+
+/// Roll each missile's seeker against every flare in the sky. A flare close
+/// behind the target's tail is what fools it; farther away is less and less
+/// likely. Any aircraft's flare works: the seeker does not know who dropped it.
+pub(crate) fn seduce_missiles(missiles: &mut [Missile], flares: &[Flare], targets: &[Target], rng: &mut u64) {
+    if flares.is_empty() || missiles.is_empty() {
+        return;
+    }
+    for m in missiles.iter_mut() {
+        roll_decoy(m, flares, targets, rng);
+    }
+}
+
+/// One seeker's decoy roll, so a caller that owns a differently shaped missile
+/// list (the bandits' wrappers) can use the same dice one shot at a time.
+pub(crate) fn roll_decoy(m: &mut Missile, flares: &[Flare], targets: &[Target], rng: &mut u64) {
+    if m.decoy.is_some() || flares.is_empty() {
+        return;
+    }
+    let Some(t) = m.target.as_ref().and_then(|k| targets.iter().find(|t| &t.key == k)) else {
+        return;
+    };
+    let range = (t.pos - m.pos).length();
+    for f in flares {
+        let near = 1.0 - ((f.pos - t.pos).length() / FLARE_NEAR).clamp(0.0, 1.0);
+        let chance = decoy_chance(range, behind_factor(t, f.pos)) * near;
+        if chance > 0.0 && next_random(rng) < chance {
+            m.decoy = Some(f.id);
+            m.target = None;
+            break;
+        }
+    }
+}
+
 impl Missile {
-    fn step(&mut self, dt: f64, targets: &[Target], flares: &[Flare], world: &World, events: &mut Vec<Event>) {
+    /// A missile leaving a rail. Both sides build their shots through this, so
+    /// a bandit's missile is the same body as the player's.
+    pub(crate) fn launch(station: usize, pos: DVec3, vel: DVec3, rot: DQuat, target: Option<TargetKey>) -> Self {
+        Self { station, pos, vel, rot, age: 0.0, burn: 0.0, target, decoy: None, alive: true }
+    }
+
+    /// The key of the aircraft this seeker is guiding on, if any.
+    pub fn target_key(&self) -> Option<&TargetKey> {
+        self.target.as_ref()
+    }
+
+    /// Has the seeker been seduced by a flare?
+    pub fn is_decoyed(&self) -> bool {
+        self.decoy.is_some()
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.alive
+    }
+
+    pub(crate) fn step(&mut self, dt: f64, targets: &[Target], flares: &[Flare], world: &World, events: &mut Vec<Event>) {
         self.age += dt;
         self.burn = if self.age < BOOST_TIME {
             (1.0 - self.age / BOOST_TIME) as f32

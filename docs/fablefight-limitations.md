@@ -135,12 +135,51 @@ refused.
   between the target's tail and the flare. The chance is bounded to 0..1.
   A seduced missile drops its aircraft target and guides on the flare; it
   detonates within 18 m of it, or flies on blind when the flare burns out.
-- Visuals: each flare is a single emissive particle with the flare's ejection
-  velocity, not a simulated burning body, and there is no flare light. The
-  simulator currently has **no enemy missile launches and no AI flares**, so
-  in normal play the seduction path is exercised by the unit test rather than
-  by a bandit shooting at the player. That is a missing feature, not a claim
-  that decoying works in a full dogfight.
+- Visuals: each burning flare is drawn as an emissive particle with a short
+  smoke tail, not a simulated burning body, and there is no flare light.
+- **Both sides use the same model.** A bandit carries 30 flares, dispenses two
+  at a time, and fires them only against a player missile closing from behind
+  inside 2.8 km. Player flares can seduce a bandit missile and bandit flares
+  can seduce the player's; the seeker rolls against every flare in the sky
+  (the free `seduce_missiles`/`roll_decoy` path in `weapons.rs`), so there is
+  no ownership rule. The visual ejection and a live dogfight were not flown;
+  the behaviour is covered by `weapons::tests` and
+  `bandits::tests::a_missile_on_the_tail_draws_the_bandits_flares`.
+
+## Bandit weapons and tactics
+
+- **Loadout.** A bandit fires its two infrared stations: the Hornet's wingtip
+  Sidewinders, the Phantom's inboard wing Sidewinders or the Raptor's side-bay
+  Sidewinders. The heavier radar missiles stay on the rails even though the
+  game's one seeker model would let the player fire them, because giving every
+  bandit six missiles made a two-ship wave saturate the fight with warheads.
+  This is a game-balance choice, not a real rules-of-engagement model.
+  A downloaded type with no station named `sidewinder` falls back to its first
+  two stations. The fired piece is hidden on the bandit's model.
+- **Launch envelope.** The AI will shoot when the target is between **700 m**
+  and a skill-scaled part of the same aspect-dependent seeker range the player
+  uses, capped at **6 km**, inside **35°** of the nose, with a line-of-sight
+  rate below **0.35 rad/s**, no missile already inbound and enough energy to
+  support the shot. After a shot it waits about 6–11 s (and longer for a less
+  aggressive pilot). The cooldown is a game rule, not a real launcher limit.
+- **Evasion.** A player missile guiding on a bandit is detected inside 6 km.
+  Inside 4 km the pilot stops attacking and beams the missile with the
+  afterburner; a missile approaching from behind inside 2.8 km draws a pair of
+  flares every 0.55 s. A missile attacking from the front draws no flares,
+  because a flare dropped into the aircraft's own wake would not be between
+  the seeker and the target. A head-on pass is offset vertically and the pilot
+  pulls up inside 500 m rather than flying through the target. There is no
+  chaff, no pre-emptive notching and no cooperation between bandits.
+- **Player warning and damage.** A bandit missile still guiding on the player
+  sets the launch-warning warble and the `MISSILE INBOUND` HUD warning. Its
+  proximity fuse calls `Plane::blast` at the body-frame point where it fired,
+  so one warhead can tear off a wing, snap the tail or destroy the hull. A
+  respawn clears enemy missiles and flares still in the air so an old shot
+  cannot follow the replacement aircraft.
+- **AI skill is constant.** Every bandit uses `Skill::average`; waves do not
+  get better pilots as the score rises. The accuracy, reaction delay, energy
+  use and missile aggressiveness are exposed in `ai::Skill`, but no start-screen
+  difficulty selector is wired to them.
 
 ## Other deliberate approximations
 
@@ -227,10 +266,10 @@ photograph. Nothing about the scheme is claimed to be historical.
   budget). They do not reproduce the type's real engine sound.
 - The level falls with distance as `500 / (d + 180)` (capped at 1.4), which is
   a game curve, not an inverse-square measurement.
-- The flare dispenser has a thump and hiss. The RWR has a warble while any
-  bandit's radar is painting the player, and a separate launch-warning warble
-  is wired but **never sounds in play**: no AI aircraft carries or launches a
-  missile yet.
+- The flare dispenser has a thump and hiss for both sides. The RWR has a
+  warble while any bandit's radar is painting the player, and the faster
+  launch-warning warble sounds while a bandit missile is still guiding on the
+  aircraft.
 - Nothing in the audio was compared against measurements or recordings of a
   real F/A-18, F-4 or F-22; the aircraft sounds remain game sounds.
 
@@ -271,7 +310,8 @@ the criteria that were actually verified.
 | A bandit flies the full flight model, stalls if mishandled, overshoots and can be out-energised | **Unverified**: the AI's angle-of-attack and energy limits are unit-tested, but the stall/overshoot/out-energy behaviour needs a flown engagement. |
 | A bandit that loses sight searches instead of tracking perfectly | **Pass**: `ai::tests::a_player_outside_the_radar_cone_is_not_seen`. |
 | Cannon rounds are real projectiles with visible tracers; hits remove structure and can tear parts off | **Unverified**: the projectile, swept-hit, ammunition and structural-damage tests pass, but the tracer visuals were not checked in the simulator. |
-| A missile blast near the player does real structural damage; a fatal blast crashes the aircraft | **Fail / unverified**: no missile is ever aimed at the player (AI aircraft carry no missiles), and `main.rs` handles a nearby `weapons::Event::Blast` by shaking the airframe only; it does not call `Plane::blast` on the player. The fatal-blast crash path was therefore not exercised. |
+| A missile blast near the player does real structural damage; a fatal blast crashes the aircraft | **Pass in unit tests, not flown**: `bandits::tests::a_bandit_launches_its_ir_missile_and_the_warhead_reaches_the_player` proves the bandit launch, guidance and proximity event; `main.rs::bandit_event` applies `Plane::blast` to the player. A fatal hit was not flown in the simulator. |
+| Bandits fire missiles and flares at the player | **Partly verified**: `ai::tests::a_missile_shot_needs_a_sensible_seeker_envelope`, `an_incoming_missile_makes_the_pilot_evade_and_flare`, `bandits::tests::a_bandit_launches_its_ir_missile_and_the_warhead_reaches_the_player`, `a_bandit_presses_a_turning_player_and_gets_a_missile_away` and `a_missile_on_the_tail_draws_the_bandits_flares` pass. A headless scripted flight showed `MISSILE INBOUND` and the missile smoke trail; the bandit flare visual and the launch/flare sounds were not captured in a running session. |
 | A mid-air collision destroys both aircraft and reports `MID-AIR` | **Pass**: `arena::tests::kills_and_deaths_accumulate_independently_and_a_collision_counts_both` and the arena integration test. |
 | Every wave puts up the configured number of simultaneous bandits (two by default; one to four on the start screen); respawn is 8 s with full stores; kills and deaths are tallied | **Pass**: `arena::tests::every_wave_puts_up_the_configured_two_bandits`, `arena::tests::the_enemy_count_caps_the_aircraft_in_the_air`, `a_death_arms_exactly_eight_seconds_and_the_respawn_rearms_the_aircraft` and `tests/arena_loop.rs`. |
 | The dogfight stays inside a configurable circular combat zone; the player outside it for more than a minute is damaged and then destroyed | **Partly verified**: the arena clamps spawns (`a_small_zone_clamps_the_spawn_inside_its_edge`), bandits turn back (`bandits::tests::a_bandit_turns_back_at_the_combat_zone_edge`), and the grace/damage curve is tested (`arena::tests::a_minute_outside_is_harmless_then_the_hull_fails`); the HUD warning and a flown exit were not checked. |
@@ -290,9 +330,25 @@ compiles. Offscreen Blender previews were rendered from front, three-quarter,
 side, top, under and rear for all three types, and the enemy halves of the
 three paint atlases were inspected.
 
-Not checked: a real flight in the simulator, the cockpit view (the radar page
-and RWR were only shader-validated, not looked at in the aircraft), firing all
-six missiles in the game, gamepad behaviour, a live arena session on each jet,
-the flare dispenser's visuals, bandit audibility in the mix, and the tracer
-visuals. Those need a display, a gamepad and a pilot; the corresponding boxes
-in `plans/fablefight/TASKS.md` are left unchecked.
+## Dogfight AI update
+
+The bandit weapons and threat-response work was checked with `cargo check` and
+`cargo test`; the unit, arena-loop and headless dogfight integration tests all
+pass. The new tests exercise the launch envelope, the approach warning, flare
+release, missile guidance to a proximity event, a bandit engaging a turning
+target, and a head-on pass that clears without ramming. A headless scripted
+flight against the free-flight opponent
+was also captured: at nine seconds the HUD showed `MISSILE INBOUND`, the
+bandit contact and the missile's smoke trail were visible, and a second later
+the warhead hit and damaged the engine. The bandit's flare visual itself was
+not captured (that needs a scripted player missile shot), and a full dogfight
+session with a human stick was not flown. The flight model, shared
+aerodynamics and shaders were not changed.
+
+Not checked by a human pilot: the cockpit view (the radar page and RWR were
+only shader-validated, not looked at in the aircraft), firing all six missiles
+in the game, gamepad behaviour, a live arena session on each jet, the bandit
+flare effect (no scripted player missile shot was driven), bandit audibility
+in the mix, and the tracer visuals. Those need a stick, a headset and a live
+session; the corresponding boxes in `plans/fablefight/TASKS.md` are left
+unchecked.

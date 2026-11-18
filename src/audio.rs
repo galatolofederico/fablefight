@@ -46,8 +46,7 @@ pub struct Warn {
     pub seeker: f32,
     /// the radar warning receiver: a bandit's radar is painting the player, 0..1
     pub rwr: f32,
-    /// a missile is guiding on the player (no AI aircraft launches one yet,
-    /// but the tone is wired for when they do)
+    /// a bandit missile is guiding on the player
     pub launch: bool,
 }
 
