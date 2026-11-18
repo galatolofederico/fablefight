@@ -4,7 +4,7 @@
 //! in, the menus and the HUD show its buttons instead of keys.
 //!
 //! Prompts are written as short specs: button names separated by spaces,
-//! with `+` and `/` drawn as text between them, e.g. `"Y + View"`, `"LT / RT"`.
+//! with `+` and `/` drawn as text between them, e.g. `"R3 + View"`, `"LT / RT"`.
 
 use egui::{pos2, vec2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Ui};
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -735,7 +735,7 @@ const LOADING_TIPS: &[&str] = &[
     "F5 shows the radio navigation instruments; the Radio page of the panel (Tab) tunes VORs and ILSs.",
     "X sets the altimeter to the QNH before take-off and on the way down.",
     "4 locks and cycles the target, 5 fires a missile, 6 the cannon and 7 the flares.",
-    "On a gamepad, LB fires missiles, RB the cannon, D-pad down the flares and Y pads the camera to the target.",
+    "On a gamepad, LB fires missiles, RB the cannon, X the flares and Y locks or cycles the target.",
     "Tab opens the flight panel: instruments, places, weather, fuel and balance.",
     "R starts again in the air over where you are; G goes to any place or address.",
     "The weather and the traffic are real: METAR at the airports, live aircraft around you.",
@@ -861,7 +861,7 @@ struct Game {
     pad_id: Option<gilrs::GamepadId>,
     /// pads already given the Xbox layout (so a pad it does not take on is not reopened forever)
     pad_fixed: Vec<[u8; 16]>,
-    /// set with Y + B on a gamepad: holds the wheel brakes on until released
+    /// set with R3 + B on a gamepad: holds the wheel brakes on until released
     parking_brake: bool,
     /// gamepad input for the menus: key events for the next UI pass, a focus
     /// move out of a text box, a d-pad direction held (and when it repeats),
@@ -1751,12 +1751,14 @@ impl Game {
     /// | left stick | pitch and roll |
     /// | LT / RT | rudder left / right |
     /// | A / B (hold) | throttle up / down |
-    /// | X (hold) | wheel brakes |
-    /// | Y + B | parking brake on / off |
+    /// | X | deploy flares |
+    /// | Y | lock / cycle target |
+    /// | R3 + B | parking brake on / off |
     /// | LB / RB | fire missile / fire cannon |
-    /// | D-pad up / down | afterburner on / off, deploy flares |
-    /// | D-pad left / right | cycle target |
-    /// | Y | padlock the camera to the target |
+    /// | D-pad up | afterburner on / off |
+    /// | D-pad down (hold) | wheel brakes |
+    /// | D-pad left / right | padlock the camera to the target |
+    /// | R3 + View | flight panel |
     /// | left stick click | landing gear |
     /// | right stick | look around |
     /// | right stick click | reset the view |
@@ -1853,7 +1855,7 @@ impl Game {
             (None, Some(a)) => ((a.value() as f64 + 1.0) * 0.5).clamp(0.0, 1.0),
             _ => 0.0,
         };
-        let modifier = pad.is_pressed(Button::North);
+        let modifier = pad.is_pressed(Button::RightThumb);
         let flying = self.mode == Mode::Fly && !self.pause_open;
         // RB is the cannon's trigger, held down: a rate, not a tap.
         self.pad_cannon = flying && pad.is_pressed(Button::RightTrigger);
@@ -1863,7 +1865,7 @@ impl Game {
             yaw: (trig(Button::RightTrigger2, Axis::RightZ) - trig(Button::LeftTrigger2, Axis::LeftZ)).clamp(-1.0, 1.0),
             // A and B work the flight panel while it is open.
             throttle: if nav == Nav::Panel { 0.0 } else { ax_pad(pad.is_pressed(Button::South), pad.is_pressed(Button::East) && !modifier) },
-            brake: pad.is_pressed(Button::West),
+            brake: nav == Nav::Off && pad.is_pressed(Button::DPadDown),
             boost: self.pad_boost,
             reverse: false,
             throttle_set: None,
@@ -2466,7 +2468,7 @@ impl Game {
                 self.pad_home = true;
             }
             (Nav::Pause, _) => {}
-            // The flight panel, open beside the flying: the same, and B (or Y + View) closes it.
+            // The flight panel, open beside the flying: the same, and B (or R3 + View) closes it.
             (Nav::Panel, Button::South) => self.pad_key(egui::Key::Enter),
             (Nav::Panel, Button::East) => self.info_open = false,
             (Nav::Panel, Button::Select) if modifier => self.info_open = false,
@@ -2475,15 +2477,16 @@ impl Game {
                 self.pad_home = true;
             }
             (Nav::Panel, Button::DPadUp | Button::DPadDown | Button::DPadLeft | Button::DPadRight) => {}
-            // Flying: the D-pad and Y are the combat controls, with no chord.
+            // Flying: the face buttons and the D-pad are the combat controls;
+            // R3 is the chord modifier. X flares, Y locks or cycles the target.
             (Nav::Off, Button::DPadUp) if !self.crashed => {
                 self.pad_boost = !self.pad_boost;
                 self.status = if self.pad_boost { t!("Afterburner on", "Postcombustion ON") } else { t!("Afterburner off", "Postcombustion OFF") }.into();
                 self.status_until = self.real + 2.0;
             }
-            (Nav::Off, Button::DPadDown) if !self.crashed => self.key(KeyCode::Digit7),
-            (Nav::Off, Button::DPadLeft | Button::DPadRight) if !self.crashed => self.key(KeyCode::Digit4),
-            (Nav::Off, Button::North) if !self.crashed => {
+            (Nav::Off, Button::West) if !self.crashed => self.key(KeyCode::Digit7),
+            (Nav::Off, Button::North) if !self.crashed => self.key(KeyCode::Digit4),
+            (Nav::Off, Button::DPadLeft | Button::DPadRight) if !self.crashed => {
                 self.padlock = !self.padlock;
                 self.status = if self.padlock { t!("Camera on target", "Caméra sur la cible") } else { t!("Camera free", "Caméra libre") }.into();
                 self.status_until = self.real + 2.0;
@@ -5244,7 +5247,7 @@ impl Game {
                                 self.bindings_page(ui);
                             });
                             menu::section(ui, "controls", t!("Controls", "Commandes"), if padui::active() { t!("Gamepad", "Manette") } else { t!("Keyboard", "Clavier") }, true, |ui| {
-                                let t = if padui::active() { t!("In flight, Y + View shows the flight panel (instruments, places, weather) and Menu pauses: settings, the globe, this list.", "En vol, Y + View affiche le panneau de vol (instruments, destinations, météo) et Menu met en pause : réglages, globe, cette liste.") } else { t!("In flight, Tab shows the flight panel (instruments, places, weather) and Esc pauses: settings, the globe, this list.", "En vol, Tab affiche le panneau de vol (instruments, destinations, météo) et Échap met en pause : réglages, globe, cette liste.") };
+                                let t = if padui::active() { t!("In flight, R3 + View shows the flight panel (instruments, places, weather) and Menu pauses: settings, the globe, this list.", "En vol, R3 + View affiche le panneau de vol (instruments, destinations, météo) et Menu met en pause : réglages, globe, cette liste.") } else { t!("In flight, Tab shows the flight panel (instruments, places, weather) and Esc pauses: settings, the globe, this list.", "En vol, Tab affiche le panneau de vol (instruments, destinations, météo) et Échap met en pause : réglages, globe, cette liste.") };
                                 ui.label(RichText::new(t).size(12.5).color(DIM));
                                 ui.add_space(6.0);
                                 menu::controls_list(ui);
@@ -5715,7 +5718,7 @@ impl Game {
                             *act = Some(PauseAct::Quit);
                         }
                         ui.add_space(8.0);
-                        let t = if pad { t!("Places, airports and the weather are on the flight panel: Y + View, while you fly.", "Lieux, aéroports et météo sont sur le panneau de vol : Y + View, pendant le vol.") } else { t!("Places, airports and the weather are on the flight panel: Tab, while you fly.", "Lieux, aéroports et météo sont sur le panneau de vol : Tab, pendant le vol.") };
+                        let t = if pad { t!("Places, airports and the weather are on the flight panel: R3 + View, while you fly.", "Lieux, aéroports et météo sont sur le panneau de vol : R3 + View, pendant le vol.") } else { t!("Places, airports and the weather are on the flight panel: Tab, while you fly.", "Lieux, aéroports et météo sont sur le panneau de vol : Tab, pendant le vol.") };
                         ui.label(RichText::new(t).size(12.0).color(DIM));
                     }
                 }
@@ -6431,7 +6434,7 @@ impl Game {
                             ui.horizontal(|ui| {
                                 shadow(ui, t!("{:.0} fps   {} tiles   {} loading   {} cars", "{:.0} fps   {} tuiles   {} en chargement   {} voitures", self.fps, stats.0, stats.1, self.n_cars), 12.0, dim);
                                 ui.add_space(6.0);
-                                padui::prompts(ui, &[("Y + View", tr("panel")), ("Menu", tr("menu"))], 16.0, 12.0, dim);
+                                padui::prompts(ui, &[("R3 + View", tr("panel")), ("Menu", tr("menu"))], 16.0, 12.0, dim);
                             });
                         } else {
                             shadow(ui, t!("{:.0} fps   {} tiles   {} loading   {} cars   Tab panel   Esc menu", "{:.0} fps   {} tuiles   {} en chargement   {} voitures   Tab panneau   Échap menu", self.fps, stats.0, stats.1, self.n_cars), 12.0, dim);
@@ -6712,7 +6715,7 @@ impl Game {
                         ui.vertical_centered(|ui| {
                             shadow(ui, t!("AIRCRAFT WRECKED", "AVION DÉTRUIT").into(), 22.0, Color32::from_rgb(255, 150, 60));
                             if pad {
-                                padui::prompts(ui, &[("Y + View", tr("go somewhere else")), ("Menu", tr("menu: respawn, globe"))], 24.0, 18.0, white);
+                                padui::prompts(ui, &[("R3 + View", tr("go somewhere else")), ("Menu", tr("menu: respawn, globe"))], 24.0, 18.0, white);
                             } else {
                                 shadow(ui, t!("R  respawn      G  go somewhere else      Esc  menu", "R  réapparaître      G  aller ailleurs      Échap  menu").into(), 18.0, white);
                             }
@@ -6724,7 +6727,7 @@ impl Game {
                 egui::Area::new(egui::Id::unique("crash")).anchor(Align2::CENTER_BOTTOM, [0.0, -70.0]).show(ctx, |ui| {
                     panel.show(ui, |ui| {
                         if pad {
-                            padui::prompts(ui, &[("A", tr("respawn")), ("Y + View", tr("go somewhere else")), ("Menu", tr("menu"))], 24.0, 18.0, white);
+                            padui::prompts(ui, &[("A", tr("respawn")), ("R3 + View", tr("go somewhere else")), ("Menu", tr("menu"))], 24.0, 18.0, white);
                         } else {
                             shadow(ui, t!("R  respawn      G  go somewhere else      Esc  menu", "R  réapparaître      G  aller ailleurs      Échap  menu").into(), 18.0, white);
                         }
