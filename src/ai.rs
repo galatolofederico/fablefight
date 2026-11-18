@@ -308,6 +308,16 @@ impl Pilot {
     }
 }
 
+/// Point the aircraft at `point` and hold full dry power: the turn back to a
+/// combat zone's centre. The pilot's normal state is overridden for as long as
+/// the boundary needs it, so the fight cannot draw a bandit out of its arena.
+pub fn return_to(me: &Plane, point: DVec3) -> plane::Controls {
+    let mut c = steer(me, point - me.pos);
+    c.throttle = 1.0;
+    c.boost = false;
+    limit_pitch(me, c)
+}
+
 /// Bank towards the target's side of the nose, then pull it into the vertical
 /// plane where the wing's lift can turn the flight path. A target behind the
 /// tail rolls hard into the shorter turn.

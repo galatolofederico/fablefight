@@ -334,7 +334,7 @@ impl Minimap {
         }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, src: &Arc<Sources>, lat: f64, lon: f64, heading: Option<f64>, info_open: bool, guide: Option<&crate::approach::Guide>, world: &crate::world::World) {
+    pub fn show(&mut self, ctx: &egui::Context, src: &Arc<Sources>, lat: f64, lon: f64, heading: Option<f64>, info_open: bool, guide: Option<&crate::approach::Guide>, world: &crate::world::World, zone: Option<(f64, f64, f64)>) {
         self.frame += 1;
         self.poll(ctx, src.google.generation());
         if let Some(h) = heading { self.heading = h; }
@@ -423,6 +423,18 @@ impl Minimap {
                     let map_drawn = self.draw_map(ctx, src, &painter, rect, cx, cy, n, angle);
                     if self.plan { drawn = map_drawn; }
                     self.draw_runways(world, &painter, rect, lat, lon, cx, cy, n, angle);
+                    // The combat zone: a red circle on the map the fight must stay in.
+                    if let Some((zlat, zlon, zr)) = zone {
+                        let zx = geo::lon_to_merc_x(zlon).rem_euclid(1.0) * n;
+                        let zy = geo::lat_to_merc_y(zlat) * n;
+                        let at = rect.center() + rotate(Vec2::new((tile_offset(zx, cx, n) * 256.0) as f32, ((zy - cy) * 256.0) as f32), angle);
+                        let mpp = 2.0 * std::f64::consts::PI * geo::R * zlat.cos() / (n * 256.0);
+                        let rp = (zr / mpp) as f32;
+                        if rp >= 2.0 {
+                            painter.circle_filled(at, rp, Color32::from_rgba_unmultiplied(255, 60, 45, 18));
+                            painter.circle_stroke(at, rp, Stroke::new(1.8, Color32::from_rgb(255, 80, 60)));
+                        }
+                    }
                     if let Some(guide) = guide { guide.draw_map(&painter, rect, cx, cy, n, angle); }
                 }
                 if !supported || drawn == 0 {

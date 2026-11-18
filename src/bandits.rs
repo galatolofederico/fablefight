@@ -12,6 +12,7 @@
 //! a missile in flight can never alias a different aircraft.
 use crate::ai::{Pilot, Skill};
 use crate::aircraft::Spec;
+use crate::arena::{zone_hull, Zone, ZoneHull};
 use crate::geo;
 use crate::plane::Plane;
 use crate::weapons::{Target, TargetKey};
@@ -27,6 +28,8 @@ pub enum KillBy {
     Missile,
     Gun,
     Collision,
+    /// The aircraft stayed outside the combat zone and broke up there.
+    Zone,
 }
 
 /// One AI aircraft.
@@ -42,6 +45,10 @@ pub struct Bandit {
     pub wreck_t: f64,
     /// What the HUD calls it.
     pub label: String,
+    /// Turning back to the combat zone: the fight must not draw it outside.
+    pub returning: bool,
+    /// Seconds spent outside the combat zone.
+    pub zone_out: f64,
 }
 
 /// The bandits in one flight.
@@ -49,6 +56,8 @@ pub struct Bandits {
     /// A removed bandit leaves a `None` here. `spawn` always appends, so an
     /// index is never reused (a missile cannot lock a new bandit by mistake).
     pub items: Vec<Option<Bandit>>,
+    /// The arena whose boundary the pilots must respect, while one is running.
+    pub zone: Option<Zone>,
     /// Where each bandit was at the start of the step (planet frame), for the
     /// swept collision test.
     prev_pos: Vec<DVec3>,
@@ -66,12 +75,13 @@ impl Default for Bandits {
 
 impl Bandits {
     pub fn new() -> Self {
-        Self { items: Vec::new(), prev_pos: Vec::new(), kills: 0, deaths: Vec::new() }
+        Self { items: Vec::new(), zone: None, prev_pos: Vec::new(), kills: 0, deaths: Vec::new() }
     }
 
     /// A new flight: forget every bandit, including their indices.
     pub fn reset(&mut self) {
         self.items.clear();
+        self.zone = None;
         self.prev_pos.clear();
         self.kills = 0;
         self.deaths.clear();
@@ -96,6 +106,8 @@ impl Bandits {
             kill_credit: None,
             wreck_t: 0.0,
             label,
+            returning: false,
+            zone_out: 0.0,
         }));
         self.prev_pos.push(pos);
         self.items.len() - 1
@@ -131,7 +143,7 @@ impl Bandits {
 
     /// Fly every bandit for one fixed step.
     pub fn step(&mut self, h: f64, world: &World, player: &Plane) {
-        let Self { items, prev_pos, deaths, .. } = self;
+        let Self { items, zone, prev_pos, deaths, .. } = self;
         if prev_pos.len() < items.len() {
             prev_pos.resize(items.len(), DVec3::ZERO);
         }
@@ -158,7 +170,23 @@ impl Bandits {
             // (Once bandits carry missiles, this is true while one of them is
             // tracking the player: the seeker keeps the contact alive.)
             let seen = b.ai.sense(&b.plane, player, false);
-            let c = b.ai.controls(&b.plane, seen, h);
+            let mut c = b.ai.controls(&b.plane, seen, h);
+            // The fight is kept inside its circle: a pilot that reaches the
+            // 80% ring turns back for the centre, whatever it was doing, and
+            // does not resume the chase until it is well inside again.
+            if let Some(z) = *zone {
+                let d = z.distance(b.plane.pos);
+                if d >= z.radius * 0.80 {
+                    b.returning = true;
+                } else if d <= z.radius * 0.55 {
+                    b.returning = false;
+                }
+                if b.returning {
+                    c = crate::ai::return_to(&b.plane, z.centre);
+                }
+            } else {
+                b.returning = false;
+            }
             if let Some(imp) = b.plane.step(h, &c, world) {
                 b.alive = false;
                 b.wreck_t = 0.0;
@@ -168,6 +196,34 @@ impl Bandits {
                 b.alive = false;
                 b.wreck_t = 0.0;
                 deaths.push((b.plane.pos, 1.0));
+            }
+            // The zone's own rule applies to the AI too, if a pilot is ever
+            // forced outside: the clock is wiped on return, and the hull is
+            // damaged after the grace until it breaks up.
+            if b.alive {
+                if let Some(z) = *zone {
+                    if z.contains(b.plane.pos) {
+                        b.zone_out = 0.0;
+                    } else {
+                        b.zone_out += h;
+                        match zone_hull(b.plane.dmg.hull, b.zone_out, h) {
+                            ZoneHull::Hold => {}
+                            ZoneHull::Damaged(hull) => {
+                                b.plane.dmg.hull = hull;
+                                b.plane.dmg.vibe = b.plane.dmg.vibe.max(0.6);
+                                b.plane.dmg.smoke = b.plane.dmg.smoke.max(0.25);
+                            }
+                            ZoneHull::Failed => {
+                                b.plane.break_up("LEFT THE COMBAT ZONE");
+                                b.alive = false;
+                                b.wreck_t = 0.0;
+                                deaths.push((b.plane.pos, 1.0));
+                            }
+                        }
+                    }
+                } else {
+                    b.zone_out = 0.0;
+                }
             }
             // The player's effect queues (HUD notes, shed pieces, sparks and
             // splashes) are drawn by `main.rs` for the player only; do not let
@@ -352,5 +408,31 @@ mod tests {
             bandits.step(h, &world, &player);
         }
         assert!(bandits.items[i].as_ref().unwrap().gone);
+    }
+
+    #[test]
+    fn a_bandit_turns_back_at_the_combat_zone_edge() {
+        let spec = &fa18::SPEC;
+        let dir = std::env::temp_dir().join("fablegame-bandit-zone-tests");
+        let src = std::sync::Arc::new(crate::sources::Sources::new(crate::fetch::Fetcher::new(dir, true), String::new()));
+        let mut world = crate::world::World::new(crate::sources::Loader::new(src, 0), 14);
+        world.flat = Some(0.0);
+        let player = Plane::spawn(spec, 0.0, 0.0, 3_000.0, 0.0, spec.cruise);
+        let (east, _, _) = geo::enu(player.pos);
+        let zone = Zone::new(player.pos, 8_000.0);
+        let mut bandits = Bandits::new();
+        bandits.zone = Some(zone);
+        // Near the 80% ring and flying straight at it.
+        let i = bandits.spawn(spec, player.pos + east * 6_600.0, east, spec.cruise);
+        let h = 1.0 / 180.0;
+        let mut most = 0.0f64;
+        for _ in 0..(30.0 / h) as usize {
+            bandits.step(h, &world, &player);
+            most = most.max(zone.distance(bandits.get(i).unwrap().plane.pos));
+        }
+        let b = bandits.get(i).unwrap();
+        assert!(b.returning, "the pilot did not turn back");
+        assert!(most < zone.radius * 1.05, "it flew {most:.0} m from a {:.0} m centre", zone.radius);
+        assert!(zone.distance(b.plane.pos) < zone.radius * 0.8, "it never came back inside");
     }
 }

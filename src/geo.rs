@@ -28,6 +28,25 @@ pub fn enu(p: DVec3) -> (DVec3, DVec3, DVec3) {
     (east, up.cross(east), up)
 }
 
+/// `n` points around a circle of `radius` metres on the sphere, starting north
+/// and going clockwise. `lat`/`lon` are degrees; the points are returned as
+/// (lat, lon) in radians.
+pub fn circle(lat: f64, lon: f64, radius: f64, n: usize) -> Vec<(f64, f64)> {
+    let (lat, lon) = (lat.to_radians(), lon.to_radians());
+    let d = (radius / R).clamp(0.0, PI);
+    let (sd, cd) = d.sin_cos();
+    let (sl, cl) = lat.sin_cos();
+    (0..n.max(3))
+        .map(|i| {
+            let b = i as f64 / n.max(3) as f64 * 2.0 * PI;
+            let (sb, cb) = b.sin_cos();
+            let lat2 = (sl * cd + cl * sd * cb).clamp(-1.0, 1.0).asin();
+            let lon2 = lon + (sb * sd * cl).atan2(cd - sl * lat2.sin());
+            (lat2, (lon2 + PI).rem_euclid(2.0 * PI) - PI)
+        })
+        .collect()
+}
+
 pub fn merc_y_to_lat(y: f64) -> f64 {
     (PI * (1.0 - 2.0 * y)).sinh().atan()
 }
@@ -99,5 +118,26 @@ impl TileId {
     pub fn width_m(self) -> f64 {
         let (lat, _) = self.lat_lon(0.5, 0.5);
         2.0 * PI * R * lat.cos().max(0.02) / (1u64 << self.z) as f64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn circle_points_sit_on_the_asked_radius() {
+        let (lat, lon, r) = (37.6f64, -122.37f64, 20_000.0f64);
+        let c = lla_to_pos(lat.to_radians(), lon.to_radians(), 0.0);
+        let chord = 2.0 * R * (r / (2.0 * R)).sin();
+        let pts = circle(lat, lon, r, 96);
+        assert_eq!(pts.len(), 96);
+        for (la, lo) in &pts {
+            let d = (lla_to_pos(*la, *lo, 0.0) - c).length();
+            assert!((d - chord).abs() < 1.0, "point at {d:.1} m, want {chord:.1}");
+        }
+        // The first point is due north, and the last is just west of it.
+        assert!(pts[0].0 > lat.to_radians());
+        assert!((pts[0].1 - lon.to_radians()).abs() < 1.0e-9);
     }
 }

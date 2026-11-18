@@ -783,6 +783,8 @@ struct Game {
     arena: arena::Arena,
     /// dogfight mode: the arena is running and only the bandits are shootable
     dogfight: bool,
+    /// Seconds the player has been outside the combat zone (0 while inside).
+    zone_out: f64,
     /// what brought the player down, for the kill feed: a bandit's gun or a
     /// collision. A crash into the ground is nobody's kill.
     player_kill: Option<bandits::KillBy>,
@@ -1155,7 +1157,7 @@ impl Game {
             g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), weapon_flash: None, damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
-            start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, city_glow: 0.0, skyglow: Default::default(), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, storm_adapt: 0.0, plane, weapons, guns: guns::Guns::new(secs.to_bits() | 1), gun_target: None, bandits: bandits::Bandits::new(), arena: arena::Arena::new(), dogfight: false, player_kill: None,
+            start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, city_glow: 0.0, skyglow: Default::default(), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, storm_adapt: 0.0, plane, weapons, guns: guns::Guns::new(secs.to_bits() | 1), gun_target: None, bandits: bandits::Bandits::new(), arena: arena::Arena::new(), dogfight: false, zone_out: 0.0, player_kill: None,
             airport_rx: None, hold_spot: None,
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
@@ -1475,6 +1477,7 @@ impl Game {
         self.gun_target = None;
         self.weapon_flash = None;
         self.player_kill = None;
+        self.zone_out = 0.0;
         self.arena.respawned();
         // The arena's fight carries on across the player's respawn: its bandits
         // stay in the air where they were. A free flight gets its opponent back.
@@ -2746,7 +2749,12 @@ impl Game {
 
     /// A fresh aircraft in the air over where we are (or where we crashed), on the same heading.
     fn respawn_here(&mut self) {
-        let (lat, lon, h) = geo::pos_to_lla(if self.crashed { self.crash.as_ref().map(|c| c.site).unwrap_or(self.plane.pos) } else { self.plane.pos });
+        let mut at = if self.crashed { self.crash.as_ref().map(|c| c.site).unwrap_or(self.plane.pos) } else { self.plane.pos };
+        if let Some(z) = self.dogfight.then(|| self.arena.zone()).flatten() {
+            // A manual respawn in the arena stays inside the fight.
+            at = z.clamp(at, 0.85);
+        }
+        let (lat, lon, h) = geo::pos_to_lla(at);
         let g = self.world.ground(lat, lon).map(|g| g.h).unwrap_or(h);
         let hd = self.plane.forward().dot(geo::enu(self.plane.pos).0).atan2(self.plane.forward().dot(geo::enu(self.plane.pos).1));
         // In the arena a manual respawn comes back at the dogfight's own height,
@@ -2819,6 +2827,12 @@ impl Game {
         self.menu.pick = Some((lat, lon));
         self.menu.airport = None;
         self.menu.runway = None;
+        // Far out, the globe cannot show a combat zone of a few kilometres:
+        // come down far enough for the red circle to be read.
+        if self.menu.alt > 250_000.0 {
+            let alt = (self.menu.zone_radius * 2_500.0).clamp(35_000.0, 900_000.0);
+            self.menu.look_at(lat, lon, alt);
+        }
         self.menu.pick_name = match menu::Menu::near_city(lat, lon) {
             Some((name, d)) if d < 40_000.0 => tr(name).to_string(),
             Some((name, d)) if d < 400_000.0 => t!("{:.0} km from {}", "À {:.0} km {}", d / 1000.0, if crate::i18n::is_fr() { crate::i18n::de_place(tr(name)) } else { tr(name).to_string() }),
@@ -2882,20 +2896,25 @@ impl Game {
         self.dogfight = false;
         self.weapons.dogfight = false;
         self.player_kill = None;
+        self.zone_out = 0.0;
         self.arena.reset();
         self.bandits.reset();
     }
 
     /// Start the arena at the chosen spot: airborne at altitude with the first
-    /// wave 8 nm ahead. The world, its live traffic and the weather stay as
-    /// they are; they are ambience, not targets.
+    /// wave five nautical miles ahead. The world, its live traffic and the
+    /// weather stay as they are; they are ambience, not targets. The fight is
+    /// bounded by the configured combat zone.
     fn begin_dogfight(&mut self, lat: f64, lon: f64, elev: f64) {
         self.dogfight = true;
         self.weapons.dogfight = true;
         self.bandits.reset();
         self.respawn_at(lat, lon, elev + DOGFIGHT_AGL, self.heading, self.spec.cruise);
-        self.arena.begin();
-        self.status = t!("Dogfight: bandits 8 nm ahead", "Combat aérien : bandits à 8 NM").into();
+        let zone = arena::Zone::new(self.plane.pos, self.menu.zone_radius * 1_000.0);
+        self.arena.begin_in(zone, self.menu.enemy_count as usize);
+        self.bandits.zone = self.arena.zone();
+        self.zone_out = 0.0;
+        self.status = t!("Dogfight: bandits 5 nm ahead", "Combat aérien : bandits à 5 NM").into();
         self.status_until = self.real + 10.0;
         self.flash.push((t!("WAVE 1", "VAGUE 1").into(), self.real));
     }
@@ -2936,11 +2955,46 @@ impl Game {
         respawn
     }
 
+    /// The combat-zone rule: a minute outside the circle is a warning; after
+    /// that the airframe takes structural damage every step, and when the hull
+    /// gives way a wing comes off. The clock is wiped the moment it is back
+    /// inside.
+    fn zone_step(&mut self, h: f64) {
+        let Some(zone) = self.arena.zone() else {
+            self.zone_out = 0.0;
+            return;
+        };
+        if self.crashed || self.plane.wrecked() {
+            self.zone_out = 0.0;
+            return;
+        }
+        if zone.contains(self.plane.pos) {
+            self.zone_out = 0.0;
+            return;
+        }
+        self.zone_out += h;
+        match arena::zone_hull(self.plane.dmg.hull, self.zone_out, h) {
+            arena::ZoneHull::Hold => {}
+            arena::ZoneHull::Damaged(hull) => {
+                self.plane.dmg.hull = hull;
+                self.plane.dmg.vibe = self.plane.dmg.vibe.max(0.6);
+                self.plane.dmg.smoke = self.plane.dmg.smoke.max(0.25);
+            }
+            arena::ZoneHull::Failed => {
+                self.plane.break_up("LEFT THE COMBAT ZONE");
+                self.player_kill = Some(bandits::KillBy::Zone);
+            }
+        }
+    }
+
     /// Put the player back in the fight when the arena's eight seconds are up:
     /// airborne over the crash site at the dogfight's height, with full stores,
     /// a full dispenser and a full cannon belt.
     fn respawn_arena(&mut self) {
         let at = if self.crashed { self.crash.as_ref().map(|c| c.site).unwrap_or(self.plane.pos) } else { self.plane.pos };
+        // A replacement comes back inside the fight, even if the wreck fell
+        // outside it: the zone's centre is the safe point to aim for.
+        let at = self.arena.zone().map(|z| z.clamp(at, 0.70)).unwrap_or(at);
         let (lat, lon, _) = geo::pos_to_lla(at);
         let g = self.world.ground(lat, lon).map(|g| g.h).unwrap_or(0.0);
         let (e, n, _) = geo::enu(self.plane.pos);
@@ -3762,8 +3816,11 @@ impl Game {
                 }
                 // The arena's own clock: credits from this step's kills, the
                 // player's death, the next wave and the respawn timer.
-                if self.dogfight && self.arena_step(h) {
-                    arena_respawn = true;
+                if self.dogfight {
+                    if self.arena_step(h) {
+                        arena_respawn = true;
+                    }
+                    self.zone_step(h);
                 }
                 // What the pipper needs of the locked target: where it is and
                 // how it is moving, from the same list the seeker saw.
@@ -4928,6 +4985,32 @@ impl Game {
                     }
                 }
             }
+            // The dogfight's circular combat zone, drawn round the chosen
+            // start point so the arena's size is visible before it begins.
+            if let Some((lat, lon)) = self.menu.pick {
+                let radius = self.menu.zone_radius * 1_000.0;
+                let pts: Vec<Option<egui::Pos2>> = geo::circle(lat, lon, radius, 96)
+                    .into_iter()
+                    .map(|(la, lo)| project(la.to_degrees(), lo.to_degrees()))
+                    .collect();
+                let ring = Color32::from_rgb(255, 72, 56);
+                let alive: Vec<egui::Pos2> = pts.iter().flatten().copied().collect();
+                if !alive.is_empty() && alive.len() == pts.len() {
+                    painter.add(egui::Shape::convex_polygon(alive, Color32::from_rgba_unmultiplied(255, 60, 45, 24), egui::Stroke::NONE));
+                }
+                for pair in pts.windows(2) {
+                    if let (Some(a), Some(b)) = (pair[0], pair[1]) {
+                        painter.line_segment([a, b], egui::Stroke::new(1.8, ring));
+                    }
+                }
+                if let (Some(a), Some(b)) = (pts.last().copied().flatten(), pts.first().copied().flatten()) {
+                    painter.line_segment([a, b], egui::Stroke::new(1.8, ring));
+                }
+                if let Some(p) = pts.iter().flatten().min_by(|a, b| a.y.total_cmp(&b.y)) {
+                    let name = t!("COMBAT ZONE  {:.0} km", "ZONE DE COMBAT  {:.0} km", self.menu.zone_radius);
+                    label(*p + egui::vec2(8.0, -10.0), &name, 12.0, ring);
+                }
+            }
             if let Some((lat, lon)) = self.menu.pick {
                 if let Some(p) = project(lat, lon) {
                     let accent = Color32::from_rgb(255, 196, 64);
@@ -5021,6 +5104,19 @@ impl Game {
                             });
                             ui.label(RichText::new(if padui::active() { t!("Or put an airport square on the globe in the crosshair and press X.", "Ou placez un carré d'aéroport du globe dans le viseur et appuyez sur X.") } else { t!("Or click an airport square on the globe; double-click to go right away.", "Ou cliquez sur un carré d'aéroport du globe ; double-clic pour y aller directement.") }).size(11.5).color(DIM));
                         });
+                        let dg = format!("{:.0} km · {} bandits", self.menu.zone_radius, self.menu.enemy_count);
+                        menu::section(ui, "dogfight", t!("Dogfight settings", "Réglages du combat"), &dg, false, |ui| {
+                            ui.spacing_mut().slider_width = 130.0;
+                            ui.horizontal(|ui| {
+                                ui.label(t!("Combat zone radius", "Rayon de la zone"));
+                                ui.add(egui::Slider::new(&mut self.menu.zone_radius, 3.0..=60.0).step_by(1.0).suffix(" km"));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(t!("Bandits in the air", "Bandits en vol"));
+                                ui.add(egui::Slider::new(&mut self.menu.enemy_count, 1..=arena::MAX_BANDITS as u32));
+                            });
+                            ui.label(RichText::new(t!("A red circle marks the zone on the globe. The fight stays inside it; an aircraft left outside for over a minute is damaged, then destroyed.", "Un cercle rouge marque la zone sur le globe. Le combat y reste ; un avion laissé dehors plus d'une minute est endommagé, puis détruit.")).size(11.5).color(DIM));
+                        });
                         ui.add_space(6.0);
                         menu::heading(ui, t!("START POINT", "POINT DE DÉPART"));
                         egui::Frame::new().fill(Color32::from_white_alpha(8)).corner_radius(8.0).inner_margin(10.0).show(ui, |ui| {
@@ -5075,7 +5171,8 @@ impl Game {
                                 }
                             }
                             ui.add_space(8.0);
-                            ui.label(RichText::new(t!("Dogfight: airborne at about 8,000 ft with the first bandits 8 nm ahead.", "Combat aérien : départ à environ 8 000 ft avec les premiers bandits à 8 NM.")).size(11.5).color(DIM));
+                            ui.label(RichText::new(t!("Dogfight: airborne at about 8,000 ft, first bandits 5 nm ahead, inside a {:.0} km combat zone.", "Combat aérien : départ à environ 8 000 ft, premiers bandits à 5 NM, dans une zone de combat de {:.0} km.", self.menu.zone_radius)).size(11.5).color(DIM));
+                            ui.label(RichText::new(t!("Up to {} bandits in the air at once. Leaving the zone damages the aircraft after a minute.", "Jusqu'à {} bandits en vol à la fois. Sortir de la zone endommage l'avion après une minute.", self.menu.enemy_count)).size(11.5).color(Color32::from_rgb(255, 120, 90)));
                             let ready = self.menu.pick.is_some() && !self.menu.starting;
                             if menu::wide_button(ui, t!("DOGFIGHT", "COMBAT AÉRIEN"), Hint::None, false, ready).clicked() {
                                 dogfight = true;
@@ -6427,7 +6524,26 @@ impl Game {
                         let c = vp * rel.as_vec3().extend(1.0);
                         let ndc = if c.w.abs() < 1.0e-6 { egui::vec2(0.0, 1.0) } else { egui::vec2(c.x / c.w, c.y / c.w) };
                         if c.w > 0.0 && ndc.x.abs() <= 0.92 && ndc.y.abs() <= 0.92 {
-                            continue; // in view: its own shape and the diamond show it
+                            // In view: a small diamond and range so a distant
+                            // bandit is not lost against the terrain. The
+                            // seeker's target already has its own designator.
+                            if range > 30_000.0 || (self.weapons.target == Some(weapons::TargetKey::Bandit(i as u32)) && self.weapons.target_view.is_some()) {
+                                continue;
+                            }
+                            let full = ctx.content_rect();
+                            let at = egui::pos2(full.left() + (ndc.x * 0.5 + 0.5) * full.width(), full.top() + (0.5 - ndc.y * 0.5) * full.height());
+                            let col = Color32::from_rgb(255, 110, 80);
+                            let st = egui::Stroke::new(1.5, col);
+                            let (r, gap) = (7.0, 0.45);
+                            for (a, b) in [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)] {
+                                let p = egui::vec2(a, b);
+                                painter.line_segment([at + p * r * (1.0 - gap), at + p * r], st);
+                            }
+                            let line = format!("{:.1} km", range / 1000.0);
+                            let pos = at + egui::vec2(9.0, 8.0);
+                            painter.text(pos + egui::vec2(1.0, 1.0), Align2::LEFT_TOP, &line, FontId::monospace(11.0), Color32::from_black_alpha(180));
+                            painter.text(pos, Align2::LEFT_TOP, &line, FontId::monospace(11.0), col);
+                            continue; // in view: its own shape and the marker show it
                         }
                         // Behind the camera the projection mirrors: point the
                         // arrow the other way round the screen.
@@ -6567,6 +6683,22 @@ impl Game {
                     });
                 });
             }
+            // The combat zone: a warning while the grace runs, then the
+            // airframe is coming apart outside it.
+            if self.dogfight && !self.crashed && !self.plane.wrecked() {
+                if let Some(zone) = self.arena.zone() {
+                    if zone.distance(self.plane.pos) > zone.radius {
+                        let (text, colour) = if self.zone_out <= arena::ZONE_GRACE {
+                            (t!("RETURN TO COMBAT ZONE  {:.0} s", "REVENEZ DANS LA ZONE  {:.0} s", (arena::ZONE_GRACE - self.zone_out).max(0.0)).to_string(), Color32::from_rgb(255, 190, 60))
+                        } else {
+                            (t!("OUTSIDE COMBAT ZONE  AIRFRAME DAMAGE", "HORS DE LA ZONE  AVION ENDOMMAGÉ").to_string(), Color32::from_rgb(255, 60, 40))
+                        };
+                        egui::Area::new(egui::Id::unique("zone_warning")).anchor(Align2::CENTER_TOP, [0.0, 120.0]).show(ctx, |ui| {
+                            shadow(ui, i18n::caps(&text), 22.0, colour);
+                        });
+                    }
+                }
+            }
             // Come to rest in pieces without burning: say so, and how to go on.
             if !self.crashed && self.plane.wrecked() && self.plane.vel.length() < 2.0 && (self.plane.on_hull || self.plane.on_ground) {
                 self.wreck_t += self.real - self.wreck_seen;
@@ -6602,7 +6734,8 @@ impl Game {
             if self.show_hud && !self.pause_open && !self.show_help && !self.goto_open {
                 if self.minimap.visible {
                     let horizontal = f.dot(e).hypot(f.dot(n));
-                    self.minimap.show(ctx, &self.src, lat, lon, (horizontal > 1e-5).then_some(hdg.to_radians()), self.info_open, landing_guide.as_ref(), &self.world);
+                    let zone = if self.dogfight { self.arena.zone().map(|z| { let (zl, zo, _) = geo::pos_to_lla(z.centre); (zl, zo, z.radius) }) } else { None };
+                    self.minimap.show(ctx, &self.src, lat, lon, (horizontal > 1e-5).then_some(hdg.to_radians()), self.info_open, landing_guide.as_ref(), &self.world, zone);
                 } else {
                     egui::Area::new(egui::Id::unique("show_minimap")).anchor(Align2::LEFT_BOTTOM, [14.0, -self.minimap.bottom]).show(ctx, |ui| {
                         if ui.button(t!("Map", "Carte")).on_hover_text(t!("Show the minimap (`)", "Afficher la mini-carte (`)")).clicked() { self.minimap.visible = true; }

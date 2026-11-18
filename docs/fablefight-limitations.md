@@ -192,6 +192,30 @@ aggressor's after them; `plane.wgsl` picks the second set for a bandit
 (`tint.w < 0`). The red bands are placed by model station, not traced from a
 photograph. Nothing about the scheme is claimed to be historical.
 
+## The combat zone
+
+- A dogfight is fought inside a circular zone centred on the chosen start
+  point. Its radius (**3–60 km**, default 20 km) and the number of bandits in
+  the air at once (**1–4**, default 2) are chosen on the start screen. The same
+  circle is drawn in red on the globe before starting and on the in-flight
+  minimap.
+- The boundary is a horizontal circle: altitude does not count, so climbing
+  does not take an aircraft out of the fight.
+- Bandits turn back for the centre at **80%** of the radius and do not resume
+  the chase until they are back inside **55%**, so the AI fight stays within
+  the circle. This is a game leash, not a real rules-of-engagement model.
+- The player is warned while outside. After **60 s** outside, the hull takes
+  `ZONE_DAMAGE` (0.03/s) of structural damage, about twenty seconds from an
+  undamaged hull to the 0.6 failure threshold; a wing then tears off and the
+  aircraft is lost. The clock resets as soon as the aircraft is back inside.
+  The same grace and damage rule applies to a bandit dragged outside. This is a
+  game rule, not a structural analysis.
+- Spawns are brought inside 72% of the radius. With a very small zone the
+  bandits appear closer than the usual five nautical miles.
+- The zone arithmetic, spawn clamping, bandit turn-back and the grace/damage
+  curve are unit-tested; the HUD warning, the actual wing break-up and a flown
+  exit were **not checked** in the simulator.
+
 ## Audio model
 
 - The player's aircraft keeps its recorded fighter loops. A bandit's engines
@@ -247,7 +271,8 @@ the criteria that were actually verified.
 | Cannon rounds are real projectiles with visible tracers; hits remove structure and can tear parts off | **Unverified**: the projectile, swept-hit, ammunition and structural-damage tests pass, but the tracer visuals were not checked in the simulator. |
 | A missile blast near the player does real structural damage; a fatal blast crashes the aircraft | **Fail / unverified**: no missile is ever aimed at the player (AI aircraft carry no missiles), and `main.rs` handles a nearby `weapons::Event::Blast` by shaking the airframe only; it does not call `Plane::blast` on the player. The fatal-blast crash path was therefore not exercised. |
 | A mid-air collision destroys both aircraft and reports `MID-AIR` | **Pass**: `arena::tests::kills_and_deaths_accumulate_independently_and_a_collision_counts_both` and the arena integration test. |
-| Waves reach two simultaneous bandits; respawn is 8 s with full stores; kills and deaths are tallied | **Pass**: `arena::tests::waves_never_put_more_than_two_bandits_in_the_air`, `a_death_arms_exactly_eight_seconds_and_the_respawn_rearms_the_aircraft` and `tests/arena_loop.rs`. |
+| Waves reach the configured number of simultaneous bandits (two by default; one to four on the start screen); respawn is 8 s with full stores; kills and deaths are tallied | **Pass**: `arena::tests::waves_never_put_more_than_two_bandits_in_the_air`, `arena::tests::the_enemy_count_caps_the_aircraft_in_the_air`, `a_death_arms_exactly_eight_seconds_and_the_respawn_rearms_the_aircraft` and `tests/arena_loop.rs`. |
+| The dogfight stays inside a configurable circular combat zone; the player outside it for more than a minute is damaged and then destroyed | **Partly verified**: the arena clamps spawns (`a_small_zone_clamps_the_spawn_inside_its_edge`), bandits turn back (`bandits::tests::a_bandit_turns_back_at_the_combat_zone_edge`), and the grace/damage curve is tested (`arena::tests::a_minute_outside_is_harmless_then_the_hull_fails`); the HUD warning and a flown exit were not checked. |
 | Nothing in the arena can target live ADS-B or airport traffic | **Pass**: `weapons::tests::dogfight_mode_leaves_live_and_airport_traffic_unshootable`. |
 | `docs/fablefight-limitations.md` lists every deliberate approximation | **Pass**: this document, updated in this phase. |
 

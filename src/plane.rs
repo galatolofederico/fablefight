@@ -1272,6 +1272,23 @@ impl Plane {
         d.wing[0] < short || d.wing[1] < short || d.fold.iter().any(|f| f.on) || d.tail.is_some() || d.hull > 0.6 || self.sink > 0.3 || (self.on_hull && self.up().dot(self.pos.normalize()) < 0.2)
     }
 
+    /// The combat zone has finished with it: the airframe breaks up in the
+    /// air. A wing comes off, the engine stops and the wreck falls. The loss
+    /// is a game rule (a boundary violation is not a structural analysis).
+    pub fn break_up(&mut self, why: &'static str) {
+        if self.wrecked() {
+            return;
+        }
+        self.cause = why;
+        let side = if self.rng.f() < 0.5 { 0 } else { 1 };
+        self.break_wing(side, self.sta(0.55), why);
+        self.dmg.hull = 1.0;
+        self.dmg.engine = 0.0;
+        self.dmg.smoke = 1.0;
+        self.dmg.smoke_black = true;
+        self.dmg.vibe = 2.0;
+    }
+
     /// Advance one physics step. Returns an impact if the aircraft was destroyed.
     pub fn step(&mut self, dt: f64, c: &Controls, world: &World) -> Option<Impact> {
         let spec = self.spec;

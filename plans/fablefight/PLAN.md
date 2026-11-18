@@ -319,7 +319,7 @@ cargo run --release -- --fly-check f22
 - [ ] Cannon rounds are real projectiles with visible tracers; hits remove structure from the bandit and can tear off parts.
 - [ ] A missile blast near the player causes real structural damage, and a fatal blast produces the existing crash behaviour.
 - [x] Mid-air collision with a bandit destroys both aircraft and reports `MID-AIR`.
-- [x] Waves escalate to two simultaneous bandits; the player respawns after 8 s with a full magazine; kills and deaths are tallied.
+- [x] Waves escalate to the configured simultaneous bandit count (two by default); the player respawns after 8 s with a full magazine; kills and deaths are tallied.
 - [x] Nothing in the arena can target live ADS-B traffic or airport traffic.
 - [x] `docs/fablefight-limitations.md` lists every deliberate approximation with its value and rationale.
 
@@ -332,7 +332,7 @@ cargo run --release -- --fly-check f22
 - **Assumption:** downloaded FlightGear aircraft remain available for free flight only. Veto if the hangar should be removed entirely.
 - **Open:** whether stores affect drag as well as mass. Phase 4 connects mass; drag is deferred unless it proves noticeable.
 - **Open:** the radar scope in Phase 6 is optional and may be dropped if schedule pressure appears; the HUD designator is the mandatory piece.
-- **Open:** the arena's steady state beyond three waves is undefined. Intended behaviour is endless escalation capped at two simultaneous bandits; confirm during Phase 5.
+- **Open:** the arena's steady state beyond three waves is undefined. Intended behaviour is endless escalation capped at the start screen's simultaneous bandit count (two by default); confirm during Phase 5.
 - **Constraint from `AGENTS.md`:** implementation requires a model at or above Claude Opus 5.5 / GPT-6 Astra / Claude Fable capability. This plan was drafted by DeepSeek V4.1 Flash and must be executed by a model meeting that bar.
 
 ## References

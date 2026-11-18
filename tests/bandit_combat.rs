@@ -88,3 +88,40 @@ fn a_missile_shot_down_a_bandit_and_the_kill_is_recorded() {
     assert!(!b.alive);
 }
 
+#[test]
+fn an_arena_bandit_closes_on_a_straight_flying_player() {
+    let dir = std::env::temp_dir().join("fablegame-bandit-approach-test");
+    let src = std::sync::Arc::new(sources::Sources::new(fetch::Fetcher::new(dir, true), String::new()));
+    let mut world = world::World::new(sources::Loader::new(src, 0), 14);
+    world.flat = Some(0.0);
+
+    let spec = &aircraft::fa18::SPEC;
+    let mut player = Plane::spawn(spec, 37.6f64.to_radians(), -122.37f64.to_radians(), 3_000.0, 0.0, spec.cruise);
+    let mut bandits = bandits::Bandits::new();
+    let mut arena = arena::Arena::new();
+    let zone = arena::Zone::new(player.pos, 20_000.0);
+    arena.begin_in(zone, 2);
+    bandits.zone = Some(zone);
+    let state = |p: &Plane| arena::PlayerState { pos: p.pos, forward: p.forward(), destroyed: false, cause: None };
+    let apply = |events: Vec<arena::Event>, bandits: &mut bandits::Bandits| {
+        for ev in events {
+            if let arena::Event::Spawn { pos, dir } = ev {
+                bandits.spawn(spec, pos, dir, spec.cruise);
+            }
+        }
+    };
+    apply(arena.step(1.0 / 180.0, &mut bandits, &state(&player)), &mut bandits);
+    let controls = plane::Controls { throttle: 0.7, ..Default::default() };
+    let h = 1.0 / 180.0;
+    let mut closest = f64::MAX;
+    for _ in 0..(45.0 / h) as usize {
+        player.step(h, &controls, &world);
+        bandits.step(h, &world, &player);
+        apply(arena.step(h, &mut bandits, &state(&player)), &mut bandits);
+        for (_, b) in bandits.alive() {
+            closest = closest.min((b.plane.pos - player.pos).length());
+        }
+    }
+    assert!(closest < 2_000.0, "the bandit never came into view: closest {closest:.0} m");
+}
+

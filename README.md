@@ -89,6 +89,8 @@ Each fighter carries six heat-seeking missiles on its own stations, a 20 mm cann
 
 The seeker looks about 45° either side of the nose for airborne aircraft and needs a few seconds to build a lock; the HUD shows `TRACK` until it is solid, then `LOCK`. It locks farther away from the rear hemisphere than head-on and refuses a launch inside its minimum range. The missile leaves its station, boosts, follows the target's heat and detonates on a proximity fuse; the correct store disappears from the aircraft. Flares fall behind the aircraft and can seduce a missile that is tracking it.
 
+Dogfights are flown inside a circular combat zone marked in red on the start globe and on the in-flight minimap. The start screen sets its radius and how many bandits may be in the air at once. Bandits stay in the zone; a player who stays outside for more than a minute takes structural damage and is eventually destroyed.
+
 # Real weather
 The weather follows the real conditions where you fly: the nearest METAR within 60 km ([aviationweather.gov](https://aviationweather.gov)) sets the wind, gusts, visibility, cloud layers and thunderstorms; with no airport near, [Open-Meteo](https://open-meteo.com)'s model stands in. It is looked up again every 10 minutes or 30 km, and the sky eases into each report. Switch it off in the weather settings (start screen, flight panel or F3) to set the weather by hand.
 

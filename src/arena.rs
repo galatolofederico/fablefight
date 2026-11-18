@@ -2,10 +2,14 @@
 //! and the kill feed.
 //!
 //! The fight is continuous in the world but organised in waves. The first
-//! three waves are one, two and three bandits; from the third wave on every
-//! wave is three aircraft, with no more than [`MAX_ALIVE`] in the air at once,
-//! so a bandit of a three-aircraft wave waits for a slot when the other two are
-//! still flying. The waves never end: this is the arena's steady state.
+//! waves grow one aircraft at a time up to the configured number of bandits;
+//! no more than that number is in the air at once, so the rest of a wave waits
+//! for a slot when the others are still flying. The waves never end: this is
+//! the arena's steady state.
+//!
+//! A dogfight is fought inside a circular [`Zone`] around the start point:
+//! bandits are put into the air inside it and turn back when they near its
+//! edge, and a player who stays outside it is damaged and then destroyed.
 //!
 //! Nothing here flies an aeroplane. `main.rs` steps the player, the bandits fly
 //! their own `Plane` through `bandits::Bandits::step`, and the arena only
@@ -30,21 +34,101 @@ pub const FEED_LIFE: f32 = 6.0;
 /// How long a kill-feed line fades over before it is dropped (s).
 pub const FEED_FADE: f32 = 1.5;
 
-/// The most bandits in the air at once. The third bandit of a three-aircraft
-/// wave joins when one of the first two goes down.
+/// The most bandits in the air at once, when the caller does not ask for a
+/// different number: two.
 pub const MAX_ALIVE: usize = 2;
 
-/// The largest wave: one, then two, then three aircraft for ever after.
+/// The most bandits the start screen can ask the arena to put in the air.
+pub const MAX_BANDITS: usize = 4;
+
+/// Seconds outside the combat zone before structural damage begins.
+pub const ZONE_GRACE: f64 = 60.0;
+
+/// Hull damage per second once [`ZONE_GRACE`] is over. The hull fails at 0.6
+/// (`Plane::wrecked`), so about twenty seconds of damage follow the grace.
+pub const ZONE_DAMAGE: f32 = 0.03;
+
+/// What one step of a zone breach does to the airframe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ZoneHull {
+    /// Still inside the grace, or the call is not a breach at all.
+    Hold,
+    /// The hull is taking structural damage; this is its new value.
+    Damaged(f32),
+    /// The hull has given way: the aircraft must break up now.
+    Failed,
+}
+
+/// The hull result of one step spent outside the zone. `outside` is the time
+/// spent outside before this step (s), `h` the step length.
+pub fn zone_hull(hull: f32, outside: f64, h: f64) -> ZoneHull {
+    if outside <= ZONE_GRACE {
+        return ZoneHull::Hold;
+    }
+    let next = hull + ZONE_DAMAGE * h as f32;
+    if next >= 0.6 {
+        ZoneHull::Failed
+    } else {
+        ZoneHull::Damaged(next)
+    }
+}
+
+/// The first waves grow one, two, three aircraft and then hold at three; a
+/// larger configured enemy count lets the fourth join at wave four.
 const WAVE_CAP: u32 = 3;
 /// The most kill-feed lines kept; old ones fall off the bottom of the list.
 const FEED_MAX: usize = 6;
 
 /// Where a wave appears: ahead of the player at the briefed set-up range of
-/// eight nautical miles, 300 m above it, and one nautical mile to either side
-/// so two bandits do not share a point.
-const SPAWN_AHEAD: f64 = 8.0 * 1852.0;
+/// five nautical miles, 300 m above it, and one nautical mile to either side
+/// so two bandits do not share a point. A spawned bandit is brought inside the
+/// combat zone if the zone is smaller than that.
+const SPAWN_AHEAD: f64 = 5.0 * 1852.0;
 const SPAWN_UP: f64 = 300.0;
 const SPAWN_SIDE: f64 = 1852.0;
+
+/// A circular combat zone: a horizontal circle on the planet, open above and
+/// below. Distances are measured along the ground, not through the air, so
+/// climbing does not take an aircraft out of the fight.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Zone {
+    /// The centre of the circle (anything with the right latitude and
+    /// longitude; its height only sets the plane the circle is measured in).
+    pub centre: DVec3,
+    /// The radius along the ground (m).
+    pub radius: f64,
+}
+
+impl Zone {
+    pub fn new(centre: DVec3, radius: f64) -> Self {
+        Self { centre, radius: radius.max(500.0) }
+    }
+
+    /// Horizontal distance from the centre (m).
+    pub fn distance(&self, pos: DVec3) -> f64 {
+        let up = self.centre.normalize_or_zero();
+        let d = pos - self.centre;
+        (d - up * d.dot(up)).length()
+    }
+
+    /// Is the position inside the circle, whatever its height?
+    pub fn contains(&self, pos: DVec3) -> bool {
+        self.distance(pos) <= self.radius
+    }
+
+    /// `pos` brought horizontally inside `fraction` of the radius, keeping its
+    /// height. Used for spawns and for where a replacement aircraft comes back.
+    pub fn clamp(&self, pos: DVec3, fraction: f64) -> DVec3 {
+        let up = self.centre.normalize_or_zero();
+        let off = pos - self.centre;
+        let flat = off - up * off.dot(up);
+        let limit = self.radius * fraction.clamp(0.0, 1.0);
+        if flat.length_squared() <= limit * limit {
+            return pos;
+        }
+        self.centre + flat.normalize_or_zero() * limit + up * off.dot(up)
+    }
+}
 
 /// One line of the kill feed and how long it has been up.
 #[derive(Clone, Debug, PartialEq)]
@@ -104,6 +188,10 @@ pub struct Arena {
     pub feed: Vec<FeedEntry>,
     /// Bandits in the current wave that have not appeared yet.
     left: u32,
+    /// The circular battle zone, while a dogfight is running.
+    zone: Option<Zone>,
+    /// The most bandits in the air at once (the player's choice, 1..=MAX_BANDITS).
+    max_alive: usize,
     /// Which bandits' kill credits have been counted, by their slots in
     /// `Bandits` (which are never reused).
     credited: Vec<bool>,
@@ -131,6 +219,8 @@ impl Arena {
             respawn_in: None,
             feed: Vec::new(),
             left: 0,
+            zone: None,
+            max_alive: MAX_ALIVE,
             credited: Vec::new(),
             started: false,
             waiting: false,
@@ -138,15 +228,32 @@ impl Arena {
         }
     }
 
-    /// Enter dogfight mode: wave one is due at the next step.
-    pub fn begin(&mut self) {
-        self.reset();
-        self.started = true;
-        self.wave = 1;
-        self.left = quota(1);
+    /// Enter dogfight mode inside `zone`, with up to `enemies` bandits in the
+    /// air at once (1..=MAX_BANDITS). Wave one is due at the next step.
+    pub fn begin_in(&mut self, zone: Zone, enemies: usize) {
+        self.zone = Some(zone);
+        self.max_alive = enemies.clamp(1, MAX_BANDITS);
+        self.begin();
     }
 
-    /// Back to dormant: no wave, no score, no feed.
+    /// Enter dogfight mode: wave one is due at the next step. The zone and
+    /// enemy count already set on the arena are kept.
+    pub fn begin(&mut self) {
+        let (zone, max_alive) = (self.zone, self.max_alive);
+        self.reset();
+        self.zone = zone;
+        self.max_alive = max_alive;
+        self.started = true;
+        self.wave = 1;
+        self.left = quota(1, self.max_alive);
+    }
+
+    /// The running fight's zone, if it has one.
+    pub fn zone(&self) -> Option<Zone> {
+        self.zone
+    }
+
+    /// Back to dormant: no wave, no score, no feed and no zone.
     pub fn reset(&mut self) {
         self.wave = 0;
         self.kills = 0;
@@ -154,6 +261,7 @@ impl Arena {
         self.respawn_in = None;
         self.feed.clear();
         self.left = 0;
+        self.zone = None;
         self.credited.clear();
         self.started = false;
         self.waiting = false;
@@ -217,16 +325,20 @@ impl Arena {
             let alive = bandits.alive_count();
             if self.left == 0 && alive == 0 {
                 self.wave += 1;
-                self.left = quota(self.wave);
+                self.left = quota(self.wave, self.max_alive);
                 events.push(Event::Wave(self.wave));
             }
-            let mut room = MAX_ALIVE.saturating_sub(alive);
+            let mut room = self.max_alive.saturating_sub(alive);
             while self.left > 0 && room > 0 {
-                let pos = spawn_point(player, self.slot);
+                let pos = spawn_point(player, self.slot, self.zone);
                 self.slot += 1;
                 self.left -= 1;
                 room -= 1;
-                events.push(Event::Spawn { pos, dir: -ahead(player) });
+                // Head-on: from the spawn point towards the player, even when
+                // the zone has pulled the point in to one side.
+                let dir = (player.pos - pos).normalize_or_zero();
+                let dir = if dir.length_squared() > 0.5 { dir } else { -ahead(player) };
+                events.push(Event::Spawn { pos, dir });
             }
         }
         events
@@ -264,6 +376,7 @@ impl Arena {
             KillBy::Missile => t!("SPLASH  {}", "ABATTU  {}", who).to_string(),
             KillBy::Gun => t!("GUN  {}", "CANON  {}", who).to_string(),
             KillBy::Collision => t!("MID-AIR  {}", "COLLISION EN VOL  {}", who).to_string(),
+            KillBy::Zone => t!("LEFT THE ZONE  {}", "SORTI DE LA ZONE  {}", who).to_string(),
         };
         self.push_feed(text);
     }
@@ -286,10 +399,11 @@ pub fn rearm(spec: &'static Spec, pieces: &[Piece], weapons: &mut Weapons, guns:
     guns.reset(spec);
 }
 
-/// How many bandits a wave holds: one, two, three, then three for ever. The
-/// waves keep coming; only the sky is capped (`MAX_ALIVE`).
-fn quota(wave: u32) -> u32 {
-    wave.clamp(1, WAVE_CAP)
+/// How many bandits a wave holds: one, then two, then three, and one more for
+/// each extra bandit the caller allows in the air (up to `MAX_BANDITS`). The
+/// waves keep coming; the live cap is the configured enemy count.
+fn quota(wave: u32, cap: usize) -> u32 {
+    wave.clamp(1, WAVE_CAP.max(cap.max(1) as u32))
 }
 
 /// The player's nose along the local horizon, or its full forward vector when
@@ -297,16 +411,19 @@ fn quota(wave: u32) -> u32 {
 fn ahead(player: &PlayerState) -> DVec3 {
     let up = player.pos.normalize_or_zero();
     let fwd = player.forward - up * player.forward.dot(up);
-    if fwd.length_squared() < 1.0 {
+    // (The flattened vector is a little shorter than one whenever the nose is
+    // pitched; only a nearly vertical nose falls back to the unflattened one.)
+    if fwd.length_squared() < 1.0e-6 {
         player.forward.normalize_or_zero()
     } else {
         fwd.normalize()
     }
 }
 
-/// Where a bandit of a wave appears: eight nautical miles ahead of the player,
+/// Where a bandit of a wave appears: five nautical miles ahead of the player,
 /// 300 m above it, with a lateral offset that alternates right, left, none.
-fn spawn_point(player: &PlayerState, slot: u32) -> DVec3 {
+/// Inside a combat zone, the point is brought in to 72% of its radius.
+fn spawn_point(player: &PlayerState, slot: u32, zone: Option<Zone>) -> DVec3 {
     let up = player.pos.normalize_or_zero();
     let fwd = ahead(player);
     let right = fwd.cross(up).normalize_or_zero();
@@ -315,7 +432,11 @@ fn spawn_point(player: &PlayerState, slot: u32) -> DVec3 {
         2 => -1.0,
         _ => 0.0,
     };
-    player.pos + fwd * SPAWN_AHEAD + right * (side * SPAWN_SIDE) + up * SPAWN_UP
+    let p = player.pos + fwd * SPAWN_AHEAD + right * (side * SPAWN_SIDE) + up * SPAWN_UP;
+    match zone {
+        Some(z) => z.clamp(p, 0.72),
+        None => p,
+    }
 }
 
 #[cfg(test)]
@@ -496,11 +617,51 @@ mod tests {
     }
 
     #[test]
-    fn the_next_wave_appears_eight_nautical_miles_ahead() {
+    fn the_next_wave_appears_ahead_inside_the_zone() {
         let mut bandits = Bandits::new();
         let mut arena = Arena::new();
         let player = player_at(3_000.0);
         arena.begin();
+        let events = arena.step(1.0 / 180.0, &mut bandits, &player);
+        let (pos, dir) = events
+            .iter()
+            .find_map(|e| match e {
+                Event::Spawn { pos, dir } => Some((*pos, *dir)),
+                _ => None,
+            })
+            .expect("the first bandit was not put up");
+        let d = pos - player.pos;
+        let up = player.pos.normalize();
+        let along = d.dot(ahead(&player));
+        assert!((along - SPAWN_AHEAD).abs() < 1.0, "spawned {along:.0} m ahead");
+        assert!((d.dot(up) - SPAWN_UP).abs() < 1.0, "spawned at the wrong height");
+        // The bandit is pointed at the player, so the AI has a contact at once.
+        let to_player = (player.pos - pos).normalize();
+        assert!(dir.dot(to_player) > 0.999, "the spawn heading is {:.1}° off the player", dir.angle_between(to_player).to_degrees());
+        assert_eq!(bandits.items.len(), 0, "the arena spawns through its caller");
+    }
+
+    #[test]
+    fn a_nose_up_player_still_spawns_bandits_level_ahead() {
+        // The player's nose is pitched up in normal flight; the setup point is
+        // measured along the horizon, not along the nose.
+        let mut player = player_at(3_000.0);
+        let up = player.pos.normalize();
+        let (_, north, _) = geo::enu(player.pos);
+        player.forward = (north + up * 0.25).normalize();
+        let p = spawn_point(&player, 0, None);
+        let d = p - player.pos;
+        assert!((d.dot(up) - SPAWN_UP).abs() < 1.0, "spawned {:.1} m off the level", d.dot(up) - SPAWN_UP);
+        assert!((d.dot(ahead(&player)) - SPAWN_AHEAD).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_small_zone_clamps_the_spawn_inside_its_edge() {
+        let mut bandits = Bandits::new();
+        let mut arena = Arena::new();
+        let player = player_at(3_000.0);
+        let zone = Zone::new(player.pos, 4_000.0);
+        arena.begin_in(zone, 2);
         let events = arena.step(1.0 / 180.0, &mut bandits, &player);
         let pos = events
             .iter()
@@ -509,11 +670,66 @@ mod tests {
                 _ => None,
             })
             .expect("the first bandit was not put up");
-        let d = pos - player.pos;
-        let up = player.pos.normalize();
-        let along = d.dot(ahead(&player));
-        assert!((along - 8.0 * 1852.0).abs() < 1.0, "spawned {along:.0} m ahead");
-        assert!((d.dot(up) - SPAWN_UP).abs() < 1.0, "spawned at the wrong height");
-        assert_eq!(bandits.items.len(), 0, "the arena spawns through its caller");
+        assert!(zone.contains(pos), "spawned {:.0} m from a 4 km centre", zone.distance(pos));
+        assert!(zone.distance(pos) <= 0.72 * zone.radius + 1.0, "not brought inside the spawn ring");
+    }
+
+    #[test]
+    fn the_enemy_count_caps_the_aircraft_in_the_air() {
+        let spec = &fa18::SPEC;
+        let mut bandits = Bandits::new();
+        let mut arena = Arena::new();
+        let player = player_at(3_000.0);
+        arena.begin_in(Zone::new(player.pos, 20_000.0), 4);
+        let h = 1.0 / 180.0;
+        let mut most = 0;
+        for _ in 0..600 {
+            for ev in arena.step(h, &mut bandits, &player) {
+                if let Event::Spawn { pos, dir } = ev {
+                    bandits.spawn(spec, pos, dir, spec.cruise);
+                }
+            }
+            most = most.max(bandits.alive_count());
+            let down = bandits.alive().next().map(|(i, _)| i);
+            if let Some(i) = down {
+                bandits.destroy(i, KillBy::Missile);
+            }
+            bandits.remove_gone();
+        }
+        assert_eq!(most, 4, "the chosen four bandits were never all in the air");
+    }
+
+    #[test]
+    fn a_minute_outside_is_harmless_then_the_hull_fails() {
+        let h = 1.0 / 180.0;
+        let mut hull = 0.0f32;
+        let mut t = 0.0;
+        // The whole grace leaves the hull untouched.
+        for _ in 0..(ZONE_GRACE / h) as usize {
+            t += h;
+            match zone_hull(hull, t, h) {
+                ZoneHull::Hold => {}
+                ZoneHull::Damaged(v) => hull = v,
+                ZoneHull::Failed => panic!("the hull failed inside the grace"),
+            }
+        }
+        assert_eq!(hull, 0.0);
+        // After it, damage accumulates step by step and the hull fails after
+        // about 0.6 / ZONE_DAMAGE seconds.
+        let mut failed_at = None;
+        for _ in 0..(30.0 / h) as usize {
+            t += h;
+            match zone_hull(hull, t, h) {
+                ZoneHull::Hold => panic!("damage stopped after the grace"),
+                ZoneHull::Damaged(v) => hull = v,
+                ZoneHull::Failed => {
+                    failed_at = Some(t);
+                    break;
+                }
+            }
+        }
+        let failed_at = failed_at.expect("the hull never failed");
+        let expected = ZONE_GRACE + (0.6 / ZONE_DAMAGE) as f64;
+        assert!((failed_at - expected).abs() < 0.1, "failed at {failed_at:.2} s, expected {expected:.2}");
     }
 }

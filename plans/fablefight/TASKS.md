@@ -206,12 +206,12 @@ cargo run --release -- --fly-check f22
 ### Implementation
 
 - [x] 5.1 Create `src/arena.rs` with the `Arena` structure and `Arena::step(h, &mut Bandits, &PlayerState)`.
-- [x] 5.2 In `src/arena.rs`, implement wave escalation: one bandit, then two, then three, capped at two simultaneously alive, endless thereafter.
+- [x] 5.2 In `src/arena.rs`, implement wave escalation: one bandit, then two, then three, capped at the configured simultaneous count (two by default), endless thereafter.
 - [x] 5.3 In `src/arena.rs`, implement player death, an 8 s timer, and an airborne respawn with a full magazine and full flare load.
 - [x] 5.4 In `src/arena.rs`, implement the kills and deaths tally and the kill feed entries `SPLASH`, `GUN`, `MID-AIR`, each attributed by weapon.
 - [x] 5.5 In `src/main.rs`, draw the kill feed and the tally on the HUD with an age-based fade.
 - [x] 5.6 In `src/main.rs`, draw the target designator: diamond, range, closure, and off-screen threat arrows for bandits outside the view.
-- [x] 5.7 In `src/menu.rs`, add a dogfight entry that spawns the player airborne a few miles out at altitude with bandits 8 nm ahead, keeping the current world and live traffic.
+- [x] 5.7 In `src/menu.rs`, add a dogfight entry that spawns the player airborne a few miles out at altitude with bandits five nautical miles ahead inside a configurable combat zone, keeping the current world and live traffic.
 - [x] 5.8 In `src/weapons.rs`, restrict target collection to bandits while in dogfight mode so live ADS-B and airport traffic cannot be locked.
 
 ### Tests
